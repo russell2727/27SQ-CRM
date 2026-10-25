@@ -2,6 +2,16 @@
 
 Contacts, 5-stage lead pipeline, company profiles, analytics, multi-user logins. Node + Express + Postgres. One service, no build step.
 
+## Deploy on Render (one click)
+
+`render.yaml` in this repo defines the web service + Postgres.
+
+1. render.com → **New → Blueprint** → connect GitHub → pick `russell2727/27SQ-CRM` → **Apply**.
+2. Render creates the `27sq-crm` web service and `27sq-crm-db` Postgres, wires `DATABASE_URL`, and generates `SESSION_SECRET`.
+3. Open the service URL. First visit creates the admin account.
+
+Cost: web service Starter (~$7/mo) + Postgres Basic (~$6/mo). The free web tier also works but sleeps after idle; swap `plan: starter` for `plan: free` in `render.yaml` if you want that.
+
 ## Deploy on Railway
 
 1. Push this folder to a GitHub repo (private is fine).

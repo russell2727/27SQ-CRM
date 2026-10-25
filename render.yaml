@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: 27sq-crm
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/auth/status
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: 27sq-crm-db
+          property: connectionString
+
+databases:
+  - name: 27sq-crm-db
+    plan: basic-256mb
