@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>27 Squared CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --magenta:#EC008C; --black:#000000; --grey:#636466;
+  --bg:#FFFFFF; --panel:#F6F6F7; --line:#E2E2E5; --ink:#000000; --ink2:#636466; --ink3:#9C9DA1;
+  --won:#1F9D55; --lost:#B42318;
+  --hd:'Archivo',Arial,sans-serif; --body:'Hanken Grotesk',Helvetica,Arial,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#141416; --panel:#1E1E21; --line:#2E2E33; --ink:#F2F2F3; --ink2:#A9AAAF; --ink3:#6E6F75; color-scheme:dark; }
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--body);background:var(--bg);color:var(--ink);font-size:15px;line-height:1.45}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:inherit}
+h1,h2,h3{font-family:var(--hd);font-weight:800;text-transform:uppercase;letter-spacing:.01em;margin:0}
+h1{font-size:22px} h2{font-size:17px} h3{font-size:13px;color:var(--ink2)}
+
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+.rail{border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+.brand{display:flex;align-items:center;gap:10px}
+.bug{display:grid;grid-template-columns:1fr 1fr;width:30px;height:30px;flex:none}
+.bug span{display:flex;align-items:center;justify-content:center;font-family:var(--hd);font-size:10px;line-height:1;color:#fff;background:var(--black)}
+.bug span:nth-child(2),.bug span:nth-child(3){background:var(--magenta)}
+@media (prefers-color-scheme:dark){.bug span{background:#fff;color:#000}.bug span:nth-child(2),.bug span:nth-child(3){background:var(--magenta);color:#fff}}
+.brand b{font-family:var(--hd);font-size:15px;text-transform:uppercase}
+.brand small{display:block;font-family:var(--body);font-weight:400;font-size:11px;color:var(--ink2);text-transform:none;letter-spacing:0}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav button{all:unset;cursor:pointer;padding:9px 10px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;font-weight:500}
+.nav button:hover{background:var(--panel)}
+.nav button[aria-current]{background:var(--black);color:#fff}
+@media (prefers-color-scheme:dark){.nav button[aria-current]{background:#fff;color:#000}}
+.nav button .n{font-size:12px;opacity:.6}
+.rail .foot{margin-top:auto;display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink2)}
+.rail .foot .who{color:var(--ink);font-weight:500;font-size:13px}
+.rail .foot button{all:unset;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.rail .foot button:hover{color:var(--magenta)}
+
+main{padding:22px 26px 60px;min-width:0}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.top .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+.btn{border:1px solid var(--line);background:var(--bg);padding:8px 14px;border-radius:6px;cursor:pointer;font-weight:500}
+.btn:hover{border-color:var(--ink2)}
+.btn.primary{background:var(--magenta);border-color:var(--magenta);color:#fff}
+.btn.primary:hover{background:#C9007A;border-color:#C9007A}
+.btn.danger{color:var(--lost)}
+.btn.sm{padding:5px 10px;font-size:13px}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn[disabled]{opacity:.5;cursor:default}
+.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,.nav button:focus-visible,.card:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+input,select,textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:8px 10px}
+textarea{min-height:80px;resize:vertical}
+.search{max-width:300px}
+label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px;font-weight:500}
+.field{margin-bottom:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{all:unset;cursor:pointer;padding:6px 12px;font-size:13px}
+.seg button[aria-pressed="true"]{background:var(--black);color:#fff}
+@media (prefers-color-scheme:dark){.seg button[aria-pressed="true"]{background:#fff;color:#000}}
+
+.board{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:12px;overflow-x:auto;padding-bottom:8px}
+.col{background:var(--panel);border-radius:8px;padding:10px;min-height:300px;display:flex;flex-direction:column;gap:8px}
+.col.over{outline:2px dashed var(--magenta);outline-offset:-2px}
+.colhead{display:flex;justify-content:space-between;align-items:baseline;padding:2px 4px 6px}
+.colhead h3{color:var(--ink)}
+.colhead .sum{font-size:12px;color:var(--ink2)}
+.card{background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--grey);border-radius:6px;padding:10px 12px;cursor:pointer}
+.card:hover{border-color:var(--ink2);border-left-color:var(--magenta)}
+.card.dragging{opacity:.4}
+.card .nm{font-weight:600}
+.card .co{font-size:13px;color:var(--ink2)}
+.card .meta{display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-top:6px}
+.card .val{color:var(--ink);font-weight:500}
+.empty{color:var(--ink3);font-size:13px;padding:12px 4px;text-align:center}
+
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:12px;color:var(--ink2);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr.rowlink{cursor:pointer}
+tr.rowlink:hover td{background:var(--panel)}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--panel);color:var(--ink2);border:1px solid var(--line)}
+.tag.won{color:var(--won);border-color:var(--won)}
+.tag.lost{color:var(--lost);border-color:var(--lost)}
+.tag.stage{color:var(--ink)}
+.tag.admin{color:var(--magenta);border-color:var(--magenta)}
+.muted{color:var(--ink2)}
+.bigempty{padding:60px 20px;text-align:center;color:var(--ink2);border:1px dashed var(--line);border-radius:8px}
+.bigempty p{margin:0 0 12px}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:22px}
+.kpi{border-top:3px solid var(--black);padding:12px 0 0}
+@media (prefers-color-scheme:dark){.kpi{border-top-color:#fff}}
+.kpi .v{font-family:var(--hd);font-size:30px;line-height:1}
+.kpi .l{font-size:13px;color:var(--ink2);margin-top:6px}
+.kpi.accent{border-top-color:var(--magenta)}
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.panel{min-width:0}
+.panel h3{margin-bottom:10px}
+.bars{display:flex;flex-direction:column;gap:7px}
+.bar{display:grid;grid-template-columns:150px 1fr 60px;align-items:center;gap:10px;font-size:13px}
+.bar .track{height:10px;background:var(--panel);border-radius:2px;overflow:hidden}
+.bar .fill{height:100%;background:var(--black)}
+.bar .fill.m{background:var(--magenta)}
+@media (prefers-color-scheme:dark){.bar .fill{background:#fff}.bar .fill.m{background:var(--magenta)}}
+.bar .n{text-align:right;color:var(--ink2)}
+.chart svg{width:100%;height:170px;display:block}
+.fstep{display:grid;grid-template-columns:150px 1fr 70px;gap:10px;align-items:center;font-size:13px;margin-bottom:6px}
+.fstep .f{height:22px;background:var(--black);border-radius:2px;min-width:2px}
+@media (prefers-color-scheme:dark){.fstep .f{background:#fff}}
+.fstep .pct{text-align:right;color:var(--ink2)}
+
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;z-index:20}
+.scrim.open{display:block}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,100vw);background:var(--bg);border-left:1px solid var(--line);z-index:21;transform:translateX(100%);transition:transform .22s ease;overflow-y:auto;padding:22px 24px 40px}
+.drawer.open{transform:none}
+@media (prefers-reduced-motion:reduce){.drawer{transition:none}}
+.drawer .dh{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:16px}
+.drawer .dh h2{font-size:19px;text-transform:none;font-family:var(--body);font-weight:600}
+.drawer .sub{color:var(--ink2);font-size:13px}
+.section{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
+.section h3{margin-bottom:10px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:14px}
+.kv .k{color:var(--ink2)}
+.stages{display:flex;gap:4px;margin:8px 0 4px}
+.stages button{all:unset;cursor:pointer;flex:1;text-align:center;font-size:11px;padding:7px 4px;background:var(--panel);border-radius:4px;color:var(--ink2)}
+.stages button:hover{color:var(--ink)}
+.stages button[aria-current]{background:var(--magenta);color:#fff}
+.act{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.act .t{color:var(--ink3);font-size:12px;white-space:nowrap;min-width:72px}
+.act .tp{font-weight:600;margin-right:6px}
+.act .by{color:var(--ink3);font-size:12px;margin-left:6px}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--black);color:#fff;padding:9px 16px;border-radius:6px;font-size:14px;z-index:30;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
+.toast.show{opacity:1}
+.toast.err{background:var(--lost)}
+@media (prefers-color-scheme:dark){.toast{background:#fff;color:#000}.toast.err{background:var(--lost);color:#fff}}
+.hide{display:none!important}
+
+/* auth */
+.auth{min-height:100vh;display:grid;place-items:center;padding:24px}
+.authbox{width:min(400px,100%);}
+.authbox .brand{margin-bottom:28px}
+.authbox h1{font-size:20px;margin-bottom:18px}
+.authbox .note{font-size:13px;color:var(--ink2);margin-top:14px}
+.err{color:var(--lost);font-size:13px;margin:-4px 0 10px;min-height:1em}
+
+@media (max-width:820px){
+  .app{grid-template-columns:1fr}
+  .rail{position:sticky;top:0;height:auto;flex-direction:row;align-items:center;padding:10px 12px;border-right:0;border-bottom:1px solid var(--line);background:var(--bg);z-index:10;gap:10px;overflow-x:auto}
+  .brand small{display:none}
+  .nav{flex-direction:row}
+  .nav button{padding:7px 10px;font-size:14px;white-space:nowrap}
+  .nav button .n{display:none}
+  .rail .foot{display:none}
+  main{padding:16px 14px 60px}
+  .board{grid-template-columns:repeat(5,82vw)}
+  .panels{grid-template-columns:1fr}
+  .grid2{grid-template-columns:1fr}
+  .bar,.fstep{grid-template-columns:110px 1fr 56px}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- constants ---------- */
+let STAGES = ['New lead','Contacted','Qualified','Proposal sent','Closed won'];
+const VERTICALS = ['Debt consolidation','Personal lending','Mortgage','Automotive','Powersports','RV / Marine','eCommerce','Other'];
+const SOURCES = ['Website','Referral','Outbound','Partner','Event','Inbound email','Other'];
+const SIZES = ['1–10','11–50','51–200','201–500','501–1,000','1,000+'];
+const ACT_TYPES = ['Note','Call','Email','Meeting','Proposal'];
+
+/* ---------- state ---------- */
+let me = null;
+let db = { contacts: [], companies: [], users: [] };
+let view = 'pipeline';
+let search = '';
+let mineOnly = false;
+
+const fmtMoney = n => '$' + (Number(n)||0).toLocaleString('en-US',{maximumFractionDigits:0});
+const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const byId = (arr,id) => arr.find(x=>String(x.id)===String(id));
+const companyName = id => (byId(db.companies,id)||{}).name || '';
+const userName = id => (byId(db.users,id)||{}).name || '';
+const fullName = c => [c.first,c.last].filter(Boolean).join(' ') || '(no name)';
+const opts = (arr, cur) => arr.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('');
+const companyOpts = cur => `<option value="">— none —</option>` + db.companies.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(co=>`<option value="${co.id}" ${String(co.id)===String(cur)?'selected':''}>${esc(co.name)}</option>`).join('');
+const ownerOpts = cur => db.users.filter(u=>u.active).map(u=>`<option value="${u.id}" ${String(u.id)===String(cur)?'selected':''}>${esc(u.name)}</option>`).join('');
+
+/* ---------- api ---------- */
+async function api(path, opts={}){
+  const r = await fetch(path, { headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if(r.status===401 && me){ me=null; renderAuth(); throw new Error('Signed out'); }
+  const data = await r.json().catch(()=>({}));
+  if(!r.ok){ throw new Error(data.error || 'Request failed'); }
+  return data;
+}
+async function refresh(){
+  const d = await api('/api/bootstrap');
+  me = d.user; db = { contacts:d.contacts, companies:d.companies, users:d.users }; STAGES = d.stages;
+  render();
+}
+const tryApi = async (fn) => { try{ return await fn(); } catch(e){ toast(e.message, true); throw e; } };
+
+/* ---------- toast ---------- */
+let toastTimer;
+function toast(msg, isErr){
+  const t = document.getElementById('toast'); t.textContent = msg; t.classList.toggle('err', !!isErr); t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), isErr?3200:1800);
+}
+
+/* ---------- auth screens ---------- */
+const brandHtml = `<div class="brand"><div class="bug" aria-hidden="true"><span>2</span><span>7</span><span>S</span><span>Q</span></div><b>27 Squared<small>Data Centric Consumer Engagement</small></b></div>`;
+
+async function renderAuth(){
+  const s = await api('/api/auth/status');
+  if(s.user){ await refresh(); return; }
+  const root = document.getElementById('root');
+  if(s.needsSetup){
+    root.innerHTML = `<div class="auth"><div class="authbox">${brandHtml}<h1>Create the admin account</h1>
+      <div class="field"><label>Your name</label><input id="s-name" autocomplete="name"></div>
+      <div class="field"><label>Email</label><input id="s-email" type="email" autocomplete="email"></div>
+      <div class="field"><label>Password (8+ characters)</label><input id="s-pass" type="password" autocomplete="new-password"></div>
+      <div class="err" id="s-err"></div>
+      <button class="btn primary" id="s-go">Create account</button>
+      <div class="note">This runs once. You'll add teammates from the Team page afterward.</div></div></div>`;
+    const go = async ()=>{ try{ await api('/api/auth/setup',{method:'POST',body:{name:v('#s-name'),email:v('#s-email'),password:v('#s-pass')}}); await refresh(); } catch(e){ document.getElementById('s-err').textContent=e.message; } };
+    document.getElementById('s-go').onclick = go;
+    root.querySelectorAll('input').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') go(); });
+  } else {
+    root.innerHTML = `<div class="auth"><div class="authbox">${brandHtml}<h1>Sign in</h1>
+      <div class="field"><label>Email</label><input id="l-email" type="email" autocomplete="email"></div>
+      <div class="field"><label>Password</label><input id="l-pass" type="password" autocomplete="current-password"></div>
+      <div class="err" id="l-err"></div>
+      <button class="btn primary" id="l-go">Sign in</button></div></div>`;
+    const go = async ()=>{ try{ await api('/api/auth/login',{method:'POST',body:{email:v('#l-email'),password:v('#l-pass')}}); await refresh(); } catch(e){ document.getElementById('l-err').textContent=e.message; } };
+    document.getElementById('l-go').onclick = go;
+    root.querySelectorAll('input').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') go(); });
+    document.getElementById('l-email').focus();
+  }
+}
+const v = sel => (document.querySelector(sel)||{value:''}).value.trim();
+
+/* ---------- shell ---------- */
+function render(){
+  const root = document.getElementById('root');
+  if(!root.querySelector('.app')){
+    root.innerHTML = `<div class="app"><aside class="rail">${brandHtml}
+      <nav class="nav" id="nav">
+        <button data-view="pipeline">Pipeline <span class="n" id="n-pipe"></span></button>
+        <button data-view="contacts">Contacts <span class="n" id="n-contacts"></span></button>
+        <button data-view="companies">Companies <span class="n" id="n-companies"></span></button>
+        <button data-view="analytics">Analytics</button>
+        ${me.role==='admin'?`<button data-view="team">Team <span class="n" id="n-team"></span></button>`:''}
+      </nav>
+      <div class="foot"><span class="who" id="who"></span><button id="pw">Change password</button><button id="export">Export backup (JSON)</button><button id="logout">Sign out</button></div>
+    </aside><main id="main"></main></div>`;
+    document.getElementById('nav').onclick = e=>{ const b=e.target.closest('button'); if(!b) return; view=b.dataset.view; search=''; render(); };
+    document.getElementById('logout').onclick = async ()=>{ await api('/api/auth/logout',{method:'POST'}); me=null; closeDrawer(); renderAuth(); };
+    document.getElementById('export').onclick = ()=>{ window.location = '/api/export'; };
+    document.getElementById('pw').onclick = openPassword;
+  }
+  [...document.querySelectorAll('#nav button')].forEach(x=>x.toggleAttribute('aria-current', x.dataset.view===view));
+  document.getElementById('who').textContent = me.name;
+  document.getElementById('n-pipe').textContent = db.contacts.filter(c=>!c.lost && c.stage!=='Closed won').length;
+  document.getElementById('n-contacts').textContent = db.contacts.length;
+  document.getElementById('n-companies').textContent = db.companies.length;
+  const nt = document.getElementById('n-team'); if(nt) nt.textContent = db.users.filter(u=>u.active).length;
+
+  const m = document.getElementById('main');
+  m.innerHTML = view==='pipeline' ? renderPipeline() : view==='contacts' ? renderContacts() : view==='companies' ? renderCompanies() : view==='team' ? renderTeam() : renderAnalytics();
+  bindMain();
+}
+
+/* ---------- pipeline ---------- */
+function renderPipeline(){
+  const visible = db.contacts.filter(c=>!mineOnly || String(c.ownerId)===String(me.id));
+  const cols = STAGES.map(s=>{
+    const cards = visible.filter(c=>c.stage===s && !c.lost);
+    const sum = cards.reduce((a,c)=>a+(Number(c.value)||0),0);
+    return `<section class="col" data-stage="${esc(s)}">
+      <div class="colhead"><h3>${esc(s)}</h3><span class="sum">${cards.length} · ${fmtMoney(sum)}</span></div>
+      ${cards.length ? cards.map(c=>`<article class="card" draggable="true" tabindex="0" data-id="${c.id}">
+        <div class="nm">${esc(fullName(c))}</div>
+        <div class="co">${esc(companyName(c.companyId) || c.title || '')}</div>
+        <div class="meta"><span>${esc(userName(c.ownerId)||c.vertical||'')}</span><span class="val">${c.value?fmtMoney(c.value):''}</span></div>
+      </article>`).join('') : `<div class="empty">Drop a lead here</div>`}
+    </section>`;
+  }).join('');
+  return `<div class="top"><h1>Pipeline</h1><div class="actions">
+      <div class="seg"><button aria-pressed="${!mineOnly}" data-mine="0">All</button><button aria-pressed="${mineOnly}" data-mine="1">Mine</button></div>
+      <button class="btn primary" data-new="contact">Add lead</button></div></div>
+    ${db.contacts.length ? `<div class="board">${cols}</div>` : `<div class="bigempty"><p>No leads yet. Add your first one and it lands in New lead.</p><button class="btn primary" data-new="contact">Add lead</button></div>`}`;
+}
+
+/* ---------- contacts ---------- */
+function renderContacts(){
+  const q = search.toLowerCase();
+  const rows = db.contacts.filter(c=>!q || [fullName(c),c.email,c.title,companyName(c.companyId),c.vertical,userName(c.ownerId)].join(' ').toLowerCase().includes(q));
+  return `<div class="top"><h1>Contacts</h1><div class="actions"><input class="search" id="search" placeholder="Search name, email, company" value="${esc(search)}"><button class="btn primary" data-new="contact">Add contact</button></div></div>
+  ${db.contacts.length ? `<table><thead><tr><th>Name</th><th>Company</th><th>Stage</th><th>Owner</th><th>Vertical</th><th>Value</th><th>Added</th></tr></thead><tbody>
+    ${rows.map(c=>`<tr class="rowlink" data-open="contact" data-id="${c.id}">
+      <td><strong>${esc(fullName(c))}</strong><div class="muted" style="font-size:13px">${esc(c.title||'')}${c.title&&c.email?' · ':''}${esc(c.email||'')}</div></td>
+      <td>${esc(companyName(c.companyId))}</td><td>${stageTag(c)}</td><td>${esc(userName(c.ownerId))}</td><td>${esc(c.vertical||'')}</td>
+      <td>${c.value?fmtMoney(c.value):''}</td><td class="muted">${fmtDate(c.createdAt)}</td></tr>`).join('') || `<tr><td colspan="7" class="empty">Nothing matches that search</td></tr>`}
+  </tbody></table>` : `<div class="bigempty"><p>No contacts yet.</p><button class="btn primary" data-new="contact">Add contact</button></div>`}`;
+}
+function stageTag(c){
+  if(c.lost) return `<span class="tag lost">Lost</span>`;
+  if(c.stage==='Closed won') return `<span class="tag won">Closed won</span>`;
+  return `<span class="tag stage">${esc(c.stage)}</span>`;
+}
+
+/* ---------- companies ---------- */
+function renderCompanies(){
+  const q = search.toLowerCase();
+  const rows = db.companies.filter(co=>!q || [co.name,co.domain,co.vertical].join(' ').toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
+  return `<div class="top"><h1>Companies</h1><div class="actions"><input class="search" id="search" placeholder="Search companies" value="${esc(search)}"><button class="btn primary" data-new="company">Add company</button></div></div>
+  ${db.companies.length ? `<table><thead><tr><th>Company</th><th>Vertical</th><th>Size</th><th>Contacts</th><th>Open pipeline</th><th>Won</th></tr></thead><tbody>
+    ${rows.map(co=>{
+      const cs = db.contacts.filter(c=>String(c.companyId)===String(co.id));
+      const open = cs.filter(c=>!c.lost && c.stage!=='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
+      const won = cs.filter(c=>!c.lost && c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
+      return `<tr class="rowlink" data-open="company" data-id="${co.id}">
+        <td><strong>${esc(co.name)}</strong><div class="muted" style="font-size:13px">${esc(co.domain||'')}</div></td>
+        <td>${esc(co.vertical||'')}</td><td>${esc(co.size||'')}</td><td>${cs.length}</td><td>${open?fmtMoney(open):''}</td><td>${won?fmtMoney(won):''}</td></tr>`;}).join('') || `<tr><td colspan="6" class="empty">Nothing matches that search</td></tr>`}
+  </tbody></table>` : `<div class="bigempty"><p>No companies yet. Companies group your contacts and roll up their deal value.</p><button class="btn primary" data-new="company">Add company</button></div>`}`;
+}
+
+/* ---------- team (admin) ---------- */
+function renderTeam(){
+  return `<div class="top"><h1>Team</h1><div class="actions"><button class="btn primary" data-new="user">Add user</button></div></div>
+  <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Open leads</th><th>Won</th></tr></thead><tbody>
+  ${db.users.map(u=>{
+    const mine = db.contacts.filter(c=>String(c.ownerId)===String(u.id));
+    return `<tr class="rowlink" data-open="user" data-id="${u.id}"><td><strong>${esc(u.name)}</strong>${String(u.id)===String(me.id)?' <span class="muted">(you)</span>':''}</td><td>${esc(u.email)}</td>
+    <td>${u.role==='admin'?'<span class="tag admin">Admin</span>':'<span class="tag">Member</span>'}</td><td>${u.active?'Active':'<span class="tag lost">Deactivated</span>'}</td>
+    <td>${mine.filter(c=>!c.lost&&c.stage!=='Closed won').length}</td><td>${fmtMoney(mine.filter(c=>!c.lost&&c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0))}</td></tr>`;}).join('')}
+  </tbody></table>`;
+}
+
+/* ---------- analytics ---------- */
+function renderAnalytics(){
+  const all = db.contacts;
+  const d30 = Date.now() - 30*864e5;
+  const newLeads30 = all.filter(c=>new Date(c.createdAt).getTime()>d30).length;
+  const won = all.filter(c=>!c.lost && c.stage==='Closed won');
+  const won30 = won.filter(c=>new Date(c.wonAt||c.createdAt).getTime()>d30);
+  const lost = all.filter(c=>c.lost);
+  const open = all.filter(c=>!c.lost && c.stage!=='Closed won');
+  const openVal = open.reduce((a,c)=>a+(Number(c.value)||0),0);
+  const wonVal = won.reduce((a,c)=>a+(Number(c.value)||0),0);
+  const closed = won.length + lost.length;
+  const winRate = closed ? Math.round(won.length/closed*100) : 0;
+  const avgDeal = won.length ? wonVal/won.length : 0;
+
+  const reached = STAGES.map(s=> all.filter(c=> (c.stageHistory||[]).some(h=>h.stage===s) || c.stage===s).length);
+  const maxReach = Math.max(1,...reached);
+
+  const days = [...Array(30)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-(29-i)); return d; });
+  const perDay = days.map(d=> all.filter(c=>{ const t=new Date(c.createdAt); return t>=d && t<new Date(d.getTime()+864e5); }).length);
+  const maxDay = Math.max(1,...perDay);
+  const W=600,H=160,pad=18, bw=(W-pad*2)/30;
+  const bars = perDay.map((v,i)=>{ const h=v/maxDay*(H-pad*2); return `<rect x="${pad+i*bw+1}" y="${H-pad-h}" width="${bw-2}" height="${h}" fill="${i===29?'var(--magenta)':'var(--ink)'}" opacity="${v?1:.15}"/>`; }).join('');
+  const labels = [0,10,20,29].map(i=>`<text x="${pad+i*bw+bw/2}" y="${H-3}" font-size="10" fill="var(--ink3)" text-anchor="middle">${days[i].toLocaleDateString('en-US',{month:'short',day:'numeric'})}</text>`).join('');
+
+  const group = key => { const m={}; all.forEach(c=>{ const k=c[key]||'Unassigned'; m[k]=(m[k]||0)+1; }); return Object.entries(m).sort((a,b)=>b[1]-a[1]); };
+  const barList = (entries, accent, money) => entries.length ? entries.map(([k,n])=>`<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill ${accent?'m':''}" style="width:${n/Math.max(1,entries[0][1])*100}%"></div></div><span class="n">${money?fmtMoney(n):n}</span></div>`).join('') : `<div class="empty">No data yet</div>`;
+  const byOwner = db.users.map(u=>[u.name, won.filter(c=>String(c.ownerId)===String(u.id)).reduce((a,c)=>a+(Number(c.value)||0),0)]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
+  const byCompany = db.companies.map(co=>[co.name, won.filter(c=>String(c.companyId)===String(co.id)).reduce((a,c)=>a+(Number(c.value)||0),0)]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  return `<div class="top"><h1>Analytics</h1><span class="muted">Last 30 days where noted</span></div>
+  <div class="kpis">
+    <div class="kpi"><div class="v">${newLeads30}</div><div class="l">New leads, 30 days</div></div>
+    <div class="kpi"><div class="v">${open.length}</div><div class="l">Open in pipeline</div></div>
+    <div class="kpi"><div class="v">${fmtMoney(openVal)}</div><div class="l">Open pipeline value</div></div>
+    <div class="kpi accent"><div class="v">${won30.length}</div><div class="l">Deals won, 30 days</div></div>
+    <div class="kpi accent"><div class="v">${fmtMoney(wonVal)}</div><div class="l">Won revenue, all time</div></div>
+    <div class="kpi"><div class="v">${winRate}%</div><div class="l">Win rate (${won.length} won / ${lost.length} lost)</div></div>
+    <div class="kpi"><div class="v">${fmtMoney(avgDeal)}</div><div class="l">Average won deal</div></div>
+  </div>
+  <div class="panels">
+    <div class="panel chart"><h3>New leads per day</h3><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New leads per day, last 30 days">${bars}${labels}</svg></div>
+    <div class="panel"><h3>Funnel — leads that reached each stage</h3>
+      ${STAGES.map((s,i)=>`<div class="fstep"><span>${esc(s)}</span><div class="f" style="width:${reached[i]/maxReach*100}%"></div><span class="pct">${reached[i]}${i&&reached[0]?` · ${Math.round(reached[i]/reached[0]*100)}%`:''}</span></div>`).join('')}</div>
+    <div class="panel"><h3>Leads by stage</h3><div class="bars">${barList([...STAGES.map(s=>[s, all.filter(c=>!c.lost&&c.stage===s).length]), ['Lost',lost.length]])}</div></div>
+    <div class="panel"><h3>Leads by vertical</h3><div class="bars">${barList(group('vertical'), true)}</div></div>
+    <div class="panel"><h3>Leads by source</h3><div class="bars">${barList(group('source'))}</div></div>
+    <div class="panel"><h3>Won revenue by owner</h3><div class="bars">${barList(byOwner, true, true)}</div></div>
+    <div class="panel"><h3>Top companies by won revenue</h3><div class="bars">${barList(byCompany, true, true)}</div></div>
+  </div>`;
+}
+
+/* ---------- main bindings ---------- */
+function bindMain(){
+  const m = document.getElementById('main');
+  m.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>openForm(b.dataset.new));
+  m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>openDetail(r.dataset.open, r.dataset.id));
+  m.querySelectorAll('[data-mine]').forEach(b=>b.onclick=()=>{ mineOnly=b.dataset.mine==='1'; render(); });
+  const s = m.querySelector('#search');
+  if(s){ s.oninput = ()=>{ search=s.value; const pos=s.selectionStart; render(); const s2=document.getElementById('search'); s2.focus(); s2.setSelectionRange(pos,pos); }; }
+  m.querySelectorAll('.card').forEach(c=>{
+    c.onclick=()=>openDetail('contact', c.dataset.id);
+    c.onkeydown=e=>{ if(e.key==='Enter') openDetail('contact', c.dataset.id); };
+    c.ondragstart=e=>{ e.dataTransfer.setData('text/plain', c.dataset.id); c.classList.add('dragging'); };
+    c.ondragend=()=>c.classList.remove('dragging');
+  });
+  m.querySelectorAll('.col').forEach(col=>{
+    col.ondragover=e=>{ e.preventDefault(); col.classList.add('over'); };
+    col.ondragleave=()=>col.classList.remove('over');
+    col.ondrop=e=>{ e.preventDefault(); col.classList.remove('over'); setStage(e.dataTransfer.getData('text/plain'), col.dataset.stage); };
+  });
+}
+
+async function setStage(id, stage){
+  const c = byId(db.contacts,id); if(!c || (c.stage===stage && !c.lost)) return;
+  await tryApi(()=>api(`/api/contacts/${id}/stage`,{method:'PATCH',body:{stage}}));
+  await refresh(); toast(`${fullName(c)} → ${stage}`);
+}
+
+/* ---------- drawer ---------- */
+const drawer = document.getElementById('drawer'), scrim = document.getElementById('scrim');
+function openDrawer(html){ drawer.innerHTML = html; drawer.classList.add('open'); scrim.classList.add('open'); drawer.setAttribute('aria-hidden','false'); const f=drawer.querySelector('input,select,textarea,button'); if(f) f.focus(); drawer.querySelector('[data-close]').onclick = closeDrawer; }
+function closeDrawer(){ drawer.classList.remove('open'); scrim.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); }
+scrim.onclick = closeDrawer;
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDrawer(); });
+const dv = sel => (drawer.querySelector(sel)||{value:''}).value.trim();
+
+function openForm(kind, id, preset={}){
+  if(kind==='contact'){
+    const c = id ? byId(db.contacts,id) : Object.assign({stage:'New lead', ownerId: me.id}, preset);
+    openDrawer(`<div class="dh"><h2>${id?'Edit contact':'New lead'}</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="grid2">
+      <div class="field"><label>First name</label><input id="f-first" value="${esc(c.first)}"></div>
+      <div class="field"><label>Last name</label><input id="f-last" value="${esc(c.last)}"></div>
+      <div class="field"><label>Title</label><input id="f-title" value="${esc(c.title)}"></div>
+      <div class="field"><label>Company</label><select id="f-company">${companyOpts(c.companyId)}</select></div>
+      <div class="field"><label>Email</label><input id="f-email" type="email" value="${esc(c.email)}"></div>
+      <div class="field"><label>Phone</label><input id="f-phone" value="${esc(c.phone)}"></div>
+      <div class="field"><label>Vertical</label><select id="f-vertical"><option value="">—</option>${opts(VERTICALS,c.vertical)}</select></div>
+      <div class="field"><label>Source</label><select id="f-source"><option value="">—</option>${opts(SOURCES,c.source)}</select></div>
+      <div class="field"><label>Stage</label><select id="f-stage">${opts(STAGES,c.stage)}</select></div>
+      <div class="field"><label>Deal value ($)</label><input id="f-value" type="number" min="0" step="100" value="${esc(c.value||'')}"></div>
+      <div class="field"><label>Owner</label><select id="f-owner">${ownerOpts(c.ownerId)}</select></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="f-notes">${esc(c.notes)}</textarea></div>
+    <div class="row"><button class="btn primary" id="f-save">${id?'Save changes':'Add lead'}</button>${id?`<button class="btn ghost danger" id="f-del">Delete</button>`:''}</div>`);
+    drawer.querySelector('#f-save').onclick = async ()=>{
+      const body = { first:dv('#f-first'), last:dv('#f-last'), title:dv('#f-title'), companyId:dv('#f-company'), email:dv('#f-email'), phone:dv('#f-phone'), vertical:dv('#f-vertical'), source:dv('#f-source'), stage:dv('#f-stage'), value:dv('#f-value'), notes:dv('#f-notes'), ownerId:dv('#f-owner') };
+      if(!body.first && !body.last){ toast('Add at least a first or last name', true); return; }
+      const saved = await tryApi(()=>api(id?`/api/contacts/${id}`:'/api/contacts',{method:id?'PUT':'POST',body}));
+      await refresh();
+      if(id){ openDetail('contact',id); toast('Saved'); } else { closeDrawer(); toast('Lead added'); }
+    };
+    const del = drawer.querySelector('#f-del');
+    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${fullName(c)}? This can't be undone.`)){ await tryApi(()=>api(`/api/contacts/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+  } else if(kind==='company'){
+    const co = id ? byId(db.companies,id) : {};
+    openDrawer(`<div class="dh"><h2>${id?'Edit company':'New company'}</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="field"><label>Company name</label><input id="c-name" value="${esc(co.name)}"></div>
+    <div class="grid2">
+      <div class="field"><label>Website / domain</label><input id="c-domain" value="${esc(co.domain)}"></div>
+      <div class="field"><label>Phone</label><input id="c-phone" value="${esc(co.phone)}"></div>
+      <div class="field"><label>Vertical</label><select id="c-vertical"><option value="">—</option>${opts(VERTICALS,co.vertical)}</select></div>
+      <div class="field"><label>Company size</label><select id="c-size"><option value="">—</option>${opts(SIZES,co.size)}</select></div>
+      <div class="field"><label>City</label><input id="c-city" value="${esc(co.city)}"></div>
+      <div class="field"><label>State</label><input id="c-state" value="${esc(co.state)}"></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="c-notes">${esc(co.notes)}</textarea></div>
+    <div class="row"><button class="btn primary" id="c-save">${id?'Save changes':'Add company'}</button>${id?`<button class="btn ghost danger" id="c-del">Delete</button>`:''}</div>`);
+    drawer.querySelector('#c-save').onclick = async ()=>{
+      const body = { name:dv('#c-name'), domain:dv('#c-domain'), phone:dv('#c-phone'), vertical:dv('#c-vertical'), size:dv('#c-size'), city:dv('#c-city'), state:dv('#c-state'), notes:dv('#c-notes') };
+      if(!body.name){ toast('Company name is required', true); return; }
+      await tryApi(()=>api(id?`/api/companies/${id}`:'/api/companies',{method:id?'PUT':'POST',body}));
+      await refresh();
+      if(id){ openDetail('company',id); toast('Saved'); } else { closeDrawer(); toast('Company added'); }
+    };
+    const del = drawer.querySelector('#c-del');
+    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${co.name}? Its contacts stay, unlinked.`)){ await tryApi(()=>api(`/api/companies/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+  } else if(kind==='user'){
+    const u = id ? byId(db.users,id) : {role:'member',active:true};
+    const isMe = id && String(id)===String(me.id);
+    openDrawer(`<div class="dh"><h2>${id?'Edit user':'Add user'}</h2><button class="btn ghost" data-close>✕</button></div>
+    <div class="field"><label>Name</label><input id="u-name" value="${esc(u.name)}"></div>
+    <div class="field"><label>Email</label><input id="u-email" type="email" value="${esc(u.email)}" ${id?'disabled':''}></div>
+    <div class="field"><label>${id?'New password (leave blank to keep)':'Temporary password (8+ characters)'}</label><input id="u-pass" type="password" autocomplete="new-password"></div>
+    <div class="grid2">
+      <div class="field"><label>Role</label><select id="u-role" ${isMe?'disabled':''}><option value="member" ${u.role==='member'?'selected':''}>Member</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></div>
+      ${id?`<div class="field"><label>Status</label><select id="u-active" ${isMe?'disabled':''}><option value="1" ${u.active?'selected':''}>Active</option><option value="0" ${!u.active?'selected':''}>Deactivated</option></select></div>`:''}
+    </div>
+    <div class="row"><button class="btn primary" id="u-save">${id?'Save changes':'Add user'}</button></div>
+    ${id?'':'<div class="muted" style="font-size:13px;margin-top:12px">Share the temporary password with them directly; they can change it after signing in.</div>'}`);
+    drawer.querySelector('#u-save').onclick = async ()=>{
+      const body = { name:dv('#u-name'), email:dv('#u-email'), password:(drawer.querySelector('#u-pass')||{}).value||'', role:dv('#u-role')||u.role, active: id ? dv('#u-active')!=='0' : true };
+      await tryApi(()=>api(id?`/api/users/${id}`:'/api/users',{method:id?'PUT':'POST',body}));
+      await refresh(); closeDrawer(); toast(id?'Saved':'User added');
+    };
+  }
+}
+
+function openPassword(){
+  openDrawer(`<div class="dh"><h2>Change password</h2><button class="btn ghost" data-close>✕</button></div>
+  <div class="field"><label>Current password</label><input id="p-cur" type="password" autocomplete="current-password"></div>
+  <div class="field"><label>New password (8+ characters)</label><input id="p-new" type="password" autocomplete="new-password"></div>
+  <div class="row"><button class="btn primary" id="p-save">Update password</button></div>`);
+  drawer.querySelector('#p-save').onclick = async ()=>{ await tryApi(()=>api('/api/auth/password',{method:'POST',body:{current:drawer.querySelector('#p-cur').value, next:drawer.querySelector('#p-new').value}})); closeDrawer(); toast('Password updated'); };
+}
+
+async function openDetail(kind, id){
+  if(kind==='contact'){
+    const c = byId(db.contacts,id); if(!c) return;
+    const co = byId(db.companies,c.companyId);
+    openDrawer(`<div class="dh"><div><h2>${esc(fullName(c))}</h2><div class="sub">${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a href="#" data-open-company="${co.id}">${esc(co.name)}</a>`:''}</div></div><button class="btn ghost" data-close>✕</button></div>
+    <div class="row"><button class="btn sm" id="d-edit">Edit</button>${c.lost?`<button class="btn sm" id="d-reopen">Reopen lead</button>`:`<button class="btn sm danger" id="d-lost">Mark lost</button>`}<span style="margin-left:auto">${stageTag(c)}</span></div>
+    ${!c.lost?`<div class="stages">${STAGES.map(s=>`<button data-stage="${esc(s)}" ${c.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
+    <div class="section"><h3>Details</h3><div class="kv">
+      <span class="k">Email</span><span>${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</span>
+      <span class="k">Phone</span><span>${c.phone?`<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:'—'}</span>
+      <span class="k">Deal value</span><span>${c.value?fmtMoney(c.value):'—'}</span>
+      <span class="k">Owner</span><span>${esc(userName(c.ownerId)||'—')}</span>
+      <span class="k">Vertical</span><span>${esc(c.vertical||'—')}</span>
+      <span class="k">Source</span><span>${esc(c.source||'—')}</span>
+      <span class="k">Added</span><span>${new Date(c.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}${c.createdBy?` by ${esc(userName(c.createdBy))}`:''}</span>
+      ${c.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(c.notes)}</span>`:''}
+    </div></div>
+    <div class="section"><h3>Activity</h3>
+      <div class="row" style="margin-bottom:10px"><select id="a-type" style="width:120px">${opts(ACT_TYPES,'Note')}</select><input id="a-text" placeholder="Log a call, email, meeting…" style="flex:1;min-width:160px"><button class="btn sm primary" id="a-add">Log</button></div>
+      <div id="a-list"><div class="empty">Loading…</div></div>
+    </div>`);
+    drawer.querySelector('#d-edit').onclick = ()=>openForm('contact',id);
+    const oc = drawer.querySelector('[data-open-company]'); if(oc) oc.onclick=e=>{ e.preventDefault(); openDetail('company', oc.dataset.openCompany); };
+    drawer.querySelectorAll('[data-stage]').forEach(b=>b.onclick=async ()=>{ await setStage(id,b.dataset.stage); openDetail('contact',id); });
+    const lostBtn = drawer.querySelector('#d-lost'); if(lostBtn) lostBtn.onclick=async ()=>{ await tryApi(()=>api(`/api/contacts/${id}/lost`,{method:'PATCH',body:{lost:true}})); await refresh(); openDetail('contact',id); toast('Marked lost'); };
+    const reopen = drawer.querySelector('#d-reopen'); if(reopen) reopen.onclick=async ()=>{ await tryApi(()=>api(`/api/contacts/${id}/lost`,{method:'PATCH',body:{lost:false}})); await refresh(); openDetail('contact',id); toast('Reopened'); };
+    const add = async ()=>{ const t=drawer.querySelector('#a-text').value.trim(); if(!t) return; await tryApi(()=>api(`/api/contacts/${id}/activities`,{method:'POST',body:{type:drawer.querySelector('#a-type').value,text:t}})); drawer.querySelector('#a-text').value=''; loadActivities(id); toast('Logged'); };
+    drawer.querySelector('#a-add').onclick = add;
+    drawer.querySelector('#a-text').onkeydown = e=>{ if(e.key==='Enter') add(); };
+    loadActivities(id);
+  } else if(kind==='company'){
+    const co = byId(db.companies,id); if(!co) return;
+    const cs = db.contacts.filter(c=>String(c.companyId)===String(id));
+    const open = cs.filter(c=>!c.lost && c.stage!=='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
+    const won = cs.filter(c=>!c.lost && c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
+    openDrawer(`<div class="dh"><div><h2>${esc(co.name)}</h2><div class="sub">${co.domain?`<a href="https://${esc(co.domain)}" target="_blank" rel="noopener">${esc(co.domain)}</a>`:''}${co.domain&&(co.city||co.state)?' · ':''}${esc([co.city,co.state].filter(Boolean).join(', '))}</div></div><button class="btn ghost" data-close>✕</button></div>
+    <div class="row"><button class="btn sm" id="d-edit">Edit</button><button class="btn sm" id="d-addc">Add contact here</button></div>
+    <div class="section"><h3>Profile</h3><div class="kv">
+      <span class="k">Vertical</span><span>${esc(co.vertical||'—')}</span>
+      <span class="k">Size</span><span>${esc(co.size||'—')}</span>
+      <span class="k">Phone</span><span>${esc(co.phone||'—')}</span>
+      <span class="k">Open pipeline</span><span>${fmtMoney(open)}</span>
+      <span class="k">Won revenue</span><span>${fmtMoney(won)}</span>
+      ${co.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(co.notes)}</span>`:''}
+    </div></div>
+    <div class="section"><h3>Contacts (${cs.length})</h3>
+      ${cs.length ? cs.map(c=>`<div class="act" style="cursor:pointer" data-open-contact="${c.id}"><span style="flex:1"><strong>${esc(fullName(c))}</strong> <span class="muted">${esc(c.title||'')}</span></span>${stageTag(c)}</div>`).join('') : `<div class="empty">No contacts linked yet</div>`}
+    </div>`);
+    drawer.querySelector('#d-edit').onclick = ()=>openForm('company',id);
+    drawer.querySelector('#d-addc').onclick = ()=>openForm('contact', null, {companyId:id, vertical:co.vertical});
+    drawer.querySelectorAll('[data-open-contact]').forEach(r=>r.onclick=()=>openDetail('contact', r.dataset.openContact));
+  } else if(kind==='user'){
+    openForm('user', id);
+  }
+}
+async function loadActivities(id){
+  const list = drawer.querySelector('#a-list'); if(!list) return;
+  try{
+    const acts = await api(`/api/contacts/${id}/activities`);
+    list.innerHTML = acts.length ? acts.map(a=>`<div class="act"><span class="t">${fmtDate(a.at)}</span><span><span class="tp">${esc(a.type)}</span>${esc(a.text)}${a.userName?`<span class="by">— ${esc(a.userName)}</span>`:''}</span></div>`).join('') : `<div class="empty">No activity logged yet</div>`;
+  }catch(e){ list.innerHTML = `<div class="empty">Couldn't load activity</div>`; }
+}
+
+renderAuth();
+</script>
+</body>
+</html>
