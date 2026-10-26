@@ -12,6 +12,9 @@ Contacts, companies, deals on a 5-stage pipeline, tasks with reminders, analytic
 - **Email** — send one-to-one from a contact or deal: goes out via connect@ with the sender's name, Reply-To set to the sender, open tracking, merge tags (`{{first_name|there}}`, `{{company}}`, `{{deal_name}}`, `{{sender_name}}`, `{{contact.<custom key>}}`). Replies are captured over IMAP from the connect@ inbox, logged on the contact, and the owner is notified. BCC connect@ from Gmail to log mail sent outside the CRM.
 - **Sequences** — multi-step email cadences (day 0 / +2 / +5…), sent from the enrolling user's name at 9:00 ET on weekdays, optional same-thread replies. Auto-stop on reply, on Closed won, on Mark lost, or manually. Sequences page shows active/replied/completed per sequence.
 - **Custom properties** (admin, Settings) — text, textarea, number, date, dropdown, checkbox on contacts, companies and deals. Shown on forms and profiles, mappable in CSV import, contact properties usable as merge tags.
+- **Pipelines** (admin, Settings) — several pipelines, each with its own stages; every stage carries a win probability, a "won" flag and a "signatures allowed" flag. Board shows plain and weighted totals per column; Analytics has a weighted forecast and forecast by expected-close month. Renaming a stage moves its deals.
+- **Rate card & line items** — products seeded from the 27SQ rate card (appends, hygiene, One Connect, Hercules ESP tiers, SMS tiers, direct mail tiers, postage, social/CTV media and management, creative, agency fee). Add them to a deal as line items: quantity, unit rate (auto from volume tiers, override freely), term for monthly items. Line items drive the deal value.
+- **Quotes** — one click builds a branded proposal PDF from the deal's line items (overview, one-time/monthly investment table, tinted subtotals, magenta total, terms, acceptance block), numbered Q-YYYY-nnnn and stored on the deal. View, email with PDF attached, mark accepted.
 - **Analytics** — new contacts/deals, open pipeline, win rate, average deal, awaiting signature, funnel, breakdowns by stage/vertical/source/owner/company.
 - **Team** (admin) — add users, roles, deactivate, reset passwords. **Settings** (admin) — integration status and setup instructions.
 
@@ -95,6 +98,8 @@ server.js          API + auth + notifications + static hosting
 lib/docusign.js    DocuSign JWT auth, templates, envelopes, Connect webhook verification
 lib/mail.js        SMTP transport
 lib/engage.js      tracked email, merge tags, sequence scheduler, IMAP reply capture
+lib/catalog.js     rate-card seed + tiered pricing
+lib/quote-pdf.js   branded proposal PDF (pdfkit)
 schema.sql         tables + idempotent migrations (auto-applied on boot)
 public/index.html  the whole front end
 ```
@@ -119,6 +124,10 @@ GET    /api/emails?contactId=|dealId=   POST /api/emails   POST /api/emails/prev
 POST   /api/sequences                   PUT/DELETE /api/sequences/:id   POST /api/sequences/:id/enroll
 POST   /api/enrollments/:id/stop
 POST   /api/properties (admin)          PUT/DELETE /api/properties/:id (admin)
+POST   /api/pipelines (admin)           PUT/DELETE /api/pipelines/:id (admin)
+POST   /api/products (admin)            PUT/DELETE /api/products/:id (admin)
+GET/POST /api/deals/:id/items           PUT/DELETE /api/items/:id        POST /api/deals/:id/value (manual override)
+GET/POST /api/deals/:id/quotes          GET /api/quotes/:id.pdf          POST /api/quotes/:id/send   PATCH /api/quotes/:id/status
 POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export

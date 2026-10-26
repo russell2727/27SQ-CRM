@@ -187,6 +187,20 @@ tr.rowlink:hover td{background:var(--panel)}
 .mail .opened{color:var(--won);font-size:12px}
 .enr{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .enr .s{font-size:12px;color:var(--ink2)}
+.items td{padding:6px 8px;font-size:13px;vertical-align:middle}
+.items th{padding:6px 8px}
+.items input,.items select{padding:4px 6px;font-size:13px}
+.items .num{text-align:right}
+.items .tot td{border-bottom:0;font-weight:600}
+.items .tot.grand td{background:var(--magenta);color:#fff}
+.items .x{all:unset;cursor:pointer;color:var(--ink3);padding:0 4px}
+.items .x:hover{color:var(--lost)}
+.quote{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.quote .s{font-size:12px;color:var(--ink2)}
+.stage-row{display:grid;grid-template-columns:1fr 70px 50px 50px 28px;gap:6px;align-items:center;margin-bottom:6px;font-size:13px}
+.stage-row input[type=number]{padding:4px 6px}
+.stage-row .x{all:unset;cursor:pointer;color:var(--ink3);text-align:center}
+.stage-row .x:hover{color:var(--lost)}
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
 .authbox{width:min(400px,100%)}
 .authbox .brand{margin-bottom:28px}
@@ -220,6 +234,7 @@ tr.rowlink:hover td{background:var(--panel)}
 /* ---------- constants ---------- */
 let STAGES = ['New lead','Contacted','Qualified','Proposal sent','Closed won'];
 let SIGN_STAGES = ['Proposal sent','Closed won'];
+let curPipeline = null;
 const VERTICALS = ['Debt consolidation','Personal lending','Mortgage','Automotive','Powersports','RV / Marine','eCommerce','Other'];
 const SOURCES = ['Website','Referral','Outbound','Partner','Event','Inbound email','Import','Other'];
 const SIZES = ['1–10','11–50','51–200','201–500','501–1,000','1,000+'];
@@ -227,7 +242,7 @@ const ACT_TYPES = ['Note','Call','Email','Meeting','Proposal'];
 
 /* ---------- state ---------- */
 let me = null;
-let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[] };
+let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[], pipelines:[], products:[] };
 let integrations = { docusign:false, email:false, inbound:false };
 let MERGE_TAGS = [];
 let view = 'pipeline';
@@ -249,7 +264,15 @@ const opts = (arr, cur) => arr.map(o=>`<option ${o===cur?'selected':''}>${esc(o)
 const companyOpts = cur => `<option value="">— none —</option>` + db.companies.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(co=>`<option value="${co.id}" ${String(co.id)===String(cur)?'selected':''}>${esc(co.name)}</option>`).join('');
 const contactOpts = (cur, companyId) => `<option value="">— none —</option>` + db.contacts.filter(c=>!companyId || String(c.companyId)===String(companyId) || String(c.id)===String(cur)).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b))).map(c=>`<option value="${c.id}" ${String(c.id)===String(cur)?'selected':''}>${esc(fullName(c))}${c.companyId?` — ${esc(companyName(c.companyId))}`:''}</option>`).join('');
 const ownerOpts = cur => db.users.filter(u=>u.active).map(u=>`<option value="${u.id}" ${String(u.id)===String(cur)?'selected':''}>${esc(u.name)}</option>`).join('');
-const dealOpen = d => !d.lost && d.stage!=='Closed won';
+const pipeOf = d => byId(db.pipelines, d.pipelineId) || db.pipelines.find(p=>p.isDefault) || db.pipelines[0] || {stages:[]};
+const stageObj = d => (pipeOf(d).stages||[]).find(st=>st.name===d.stage) || null;
+const isWon = d => !d.lost && !!(stageObj(d)||{}).won;
+const dealOpen = d => !d.lost && !isWon(d);
+const probOf = d => d.lost ? 0 : ((stageObj(d)||{}).probability ?? 0);
+const weighted = arr => arr.reduce((a,d)=>a+(Number(d.value)||0)*probOf(d)/100,0);
+const stageNames = pipe => (pipe?.stages||[]).map(st=>st.name);
+const defaultPipe = () => db.pipelines.find(p=>p.isDefault)||db.pipelines[0]||{stages:[]};
+const pipeOpts = cur => db.pipelines.map(p=>`<option value="${p.id}" ${String(p.id)===String(cur)?'selected':''}>${esc(p.name)}</option>`).join('');
 const dealsOf = {
   contact: id => db.deals.filter(d=>String(d.contactId)===String(id)),
   company: id => db.deals.filter(d=>String(d.companyId)===String(id)),
@@ -289,7 +312,8 @@ async function api(path, opts={}){
 }
 async function refresh(){
   const d = await api('/api/bootstrap');
-  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[] };
+  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[], pipelines:d.pipelines||[], products:d.products||[] };
+  if(!curPipeline || !byId(db.pipelines,curPipeline)) curPipeline = (db.pipelines.find(p=>p.isDefault)||db.pipelines[0]||{}).id;
   STAGES = d.stages; SIGN_STAGES = d.signStages; integrations = d.integrations; MERGE_TAGS = d.mergeTags||[];
   render();
 }
@@ -391,11 +415,14 @@ function sigBadge(d){
   return `<span class="sig">Awaiting signature</span>`;
 }
 function renderPipeline(){
-  const visible = db.deals.filter(d=>!mineOnly || String(d.ownerId)===String(me.id));
-  const cols = STAGES.map(s=>{
+  const pipe = byId(db.pipelines,curPipeline) || defaultPipe();
+  const visible = db.deals.filter(d=>String(d.pipelineId)===String(pipe.id) && (!mineOnly || String(d.ownerId)===String(me.id)));
+  const openDeals = visible.filter(dealOpen);
+  const cols = (pipe.stages||[]).map(st=>{
+    const s = st.name;
     const cards = visible.filter(d=>d.stage===s && !d.lost);
     return `<section class="col" data-stage="${esc(s)}">
-      <div class="colhead"><h3>${esc(s)}</h3><span class="sum">${cards.length} · ${fmtMoney(sum(cards))}</span></div>
+      <div class="colhead"><h3>${esc(s)}</h3><span class="sum" title="${st.probability}% probability">${cards.length} · ${fmtMoney(sum(cards))}${st.won?'':` · <b>${fmtMoney(sum(cards)*st.probability/100)}</b>`}</span></div>
       ${cards.length ? cards.map(d=>`<article class="card" draggable="true" tabindex="0" data-id="${d.id}">
         <div class="nm">${esc(d.name)}</div>
         <div class="co">${esc([contactName(d.contactId), companyName(d.companyId)].filter(Boolean).join(' · '))}</div>
@@ -404,13 +431,16 @@ function renderPipeline(){
     </section>`;
   }).join('');
   return `<div class="top"><h1>Pipeline</h1><div class="actions">
+      ${db.pipelines.length>1?`<select id="pipe-sel" style="width:auto">${pipeOpts(pipe.id)}</select>`:''}
+      <span class="note">Open ${fmtMoney(sum(openDeals))} · weighted <b>${fmtMoney(weighted(openDeals))}</b></span>
       <div class="seg"><button aria-pressed="${!mineOnly}" data-mine="0">All</button><button aria-pressed="${mineOnly}" data-mine="1">Mine</button></div>
       <button class="btn primary" data-new="deal">Add deal</button></div></div>
-    ${db.deals.length ? `<div class="board">${cols}</div>` : `<div class="bigempty"><p>No deals yet. Add one, or add a contact and tick "also create a deal".</p><button class="btn primary" data-new="deal">Add deal</button></div>`}`;
+    <div class="board" style="grid-template-columns:repeat(${(pipe.stages||[]).length},minmax(220px,1fr))">${cols}</div>
+    ${db.deals.length ? '' : `<div class="bigempty" style="margin-top:12px"><p>No deals yet. Add one, or add a contact and tick "also create a deal".</p><button class="btn primary" data-new="deal">Add deal</button></div>`}`;
 }
 function stageTag(d){
   if(d.lost) return `<span class="tag lost">Lost</span>`;
-  if(d.stage==='Closed won') return `<span class="tag won">Closed won</span>`;
+  if(isWon(d)) return `<span class="tag won">${esc(d.stage)}</span>`;
   return `<span class="tag stage">${esc(d.stage)}</span>`;
 }
 function contactStatus(c){
@@ -418,7 +448,7 @@ function contactStatus(c){
   if(!ds.length) return `<span class="tag">No deal</span>`;
   const open = ds.filter(dealOpen);
   if(open.length) return open.length===1 ? stageTag(open[0]) : `<span class="tag stage">${open.length} open deals</span>`;
-  if(ds.some(d=>!d.lost && d.stage==='Closed won')) return `<span class="tag won">Won</span>`;
+  if(ds.some(isWon)) return `<span class="tag won">Won</span>`;
   return `<span class="tag lost">Lost</span>`;
 }
 
@@ -443,7 +473,7 @@ function renderCompanies(){
   ${db.companies.length ? `<table><thead><tr><th>Company</th><th>Vertical</th><th>Size</th><th>Contacts</th><th>Open pipeline</th><th>Won</th></tr></thead><tbody>
     ${rows.map(co=>{
       const cs = db.contacts.filter(c=>String(c.companyId)===String(co.id)), ds = dealsOf.company(co.id);
-      const open = sum(ds.filter(dealOpen)), won = sum(ds.filter(d=>!d.lost && d.stage==='Closed won'));
+      const open = sum(ds.filter(dealOpen)), won = sum(ds.filter(isWon));
       return `<tr class="rowlink" data-open="company" data-id="${co.id}">
         <td><strong>${esc(co.name)}</strong><div class="muted" style="font-size:13px">${esc(co.domain||'')}</div></td>
         <td>${esc(co.vertical||'')}</td><td>${esc(co.size||'')}</td><td>${cs.length}</td><td>${open?fmtMoney(open):''}</td><td>${won?fmtMoney(won):''}</td></tr>`;}).join('') || `<tr><td colspan="6" class="empty">Nothing matches that search</td></tr>`}
@@ -595,7 +625,7 @@ function renderTeam(){
     const mine = db.deals.filter(d=>String(d.ownerId)===String(u.id));
     return `<tr class="rowlink" data-open="user" data-id="${u.id}"><td><strong>${esc(u.name)}</strong>${String(u.id)===String(me.id)?' <span class="muted">(you)</span>':''}</td><td>${esc(u.email)}</td>
     <td>${u.role==='admin'?'<span class="tag admin">Admin</span>':'<span class="tag">Member</span>'}</td><td>${u.active?'Active':'<span class="tag lost">Deactivated</span>'}</td>
-    <td>${mine.filter(dealOpen).length}</td><td>${fmtMoney(sum(mine.filter(d=>!d.lost&&d.stage==='Closed won')))}</td></tr>`;}).join('')}
+    <td>${mine.filter(dealOpen).length}</td><td>${fmtMoney(sum(mine.filter(isWon)))}</td></tr>`;}).join('')}
   </tbody></table>`;
 }
 
@@ -632,6 +662,14 @@ async function loadSettings(){
         <p class="note" style="margin-top:14px"><b>Status updates:</b> in DocuSign → Settings → Connect, add a configuration pointing at <code>${esc(s.webhookUrl)}</code>, format JSON, events: envelope sent/delivered/completed/declined/voided. Set an HMAC key there and put the same value in <code>DS_WEBHOOK_SECRET</code>${ds.webhookSecretSet?' (set)':' (not set)'}. Without Connect, use the Refresh button on each envelope.</p>
       </div>
     </div>
+    <div class="section"><h3>Pipelines <button class="btn sm" id="pipe-new">Add pipeline</button></h3>
+      <p class="note">Each stage carries a win probability used for the weighted forecast. Flag the won stage and the stages where signatures can be sent.</p>
+      <table><thead><tr><th>Pipeline</th><th>Stages</th><th>Deals</th><th></th></tr></thead><tbody>${db.pipelines.map(p=>`<tr><td><strong>${esc(p.name)}</strong>${p.isDefault?' <span class="tag m">Default</span>':''}</td><td class="muted" style="font-size:13px">${p.stages.map(st=>`${esc(st.name)} ${st.probability}%${st.won?' ✓':''}`).join(' → ')}</td><td>${db.deals.filter(d=>String(d.pipelineId)===String(p.id)).length}</td><td style="text-align:right;white-space:nowrap"><button class="btn sm" data-pipe-edit="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table>
+    </div>
+    <div class="section"><h3>Rate card <button class="btn sm" id="prod-new">Add product</button></h3>
+      <p class="note">Products available as deal line items. Tiered items re-price from the quantity; monthly items multiply by the term.</p>
+      <table><thead><tr><th>Product</th><th>Category</th><th>Billing</th><th>Rate</th><th></th></tr></thead><tbody>${db.products.map(p=>`<tr ${p.active?'':'style="opacity:.5"'}><td><strong>${esc(p.name)}</strong><div class="muted" style="font-size:12px">${esc(p.description||'')}</div></td><td>${esc(p.category||'')}</td><td>${p.billing==='monthly'?'Monthly':'One-time'} · per ${esc(p.unit)}</td><td style="font-size:13px">${p.tiers.length?p.tiers.map(t=>`${Number(t.min).toLocaleString()}+ $${t.price}`).join('<br>'):'$'+p.price}</td><td style="text-align:right;white-space:nowrap"><button class="btn sm" data-prod-edit="${p.id}">Edit</button> <button class="btn sm ghost danger" data-prod-del="${p.id}">Delete</button></td></tr>`).join('')}</tbody></table>
+    </div>
     <div class="section"><h3>Custom properties <button class="btn sm" id="prop-new">Add property</button></h3>
       <p class="note">Extra fields on contacts, companies and deals. They appear on forms and profiles, in CSV import mapping, and contact properties are available as merge tags (<code>{{contact.key}}</code>).</p>
       ${['contact','company','deal'].map(obj=>`<h3 style="margin-top:14px">${obj.charAt(0).toUpperCase()+obj.slice(1)} properties</h3>
@@ -639,11 +677,62 @@ async function loadSettings(){
     </div>`;
     const tm = document.getElementById('test-mail'); if(tm) tm.onclick = async ()=>{ await tryApi(()=>api('/api/settings/test-email',{method:'POST'})); toast('Test email sent'); };
     el.querySelector('#prop-new').onclick = ()=>openPropertyForm();
+    el.querySelector('#pipe-new').onclick = ()=>openPipelineForm();
+    el.querySelectorAll('[data-pipe-edit]').forEach(b=>b.onclick=()=>openPipelineForm(b.dataset.pipeEdit));
+    el.querySelector('#prod-new').onclick = ()=>openProductForm();
+    el.querySelectorAll('[data-prod-edit]').forEach(b=>b.onclick=()=>openProductForm(b.dataset.prodEdit));
+    el.querySelectorAll('[data-prod-del]').forEach(b=>b.onclick=async ()=>{ const p=byId(db.products,b.dataset.prodDel); if(!confirm(`Delete "${p.name}" from the rate card? Existing deal line items keep their values.`)) return; await tryApi(()=>api(`/api/products/${p.id}`,{method:'DELETE'})); await refresh(); toast('Deleted'); });
     el.querySelectorAll('[data-prop-edit]').forEach(b=>b.onclick=()=>openPropertyForm(b.dataset.propEdit));
     el.querySelectorAll('[data-prop-del]').forEach(b=>b.onclick=async ()=>{ const p=byId(db.properties,b.dataset.propDel); if(!confirm(`Delete "${p.label}"? Its values are removed from every ${p.object}.`)) return; await tryApi(()=>api(`/api/properties/${p.id}`,{method:'DELETE'})); await refresh(); toast('Property deleted'); });
   }catch(e){ el.innerHTML = `<div class="warnbox">${esc(e.message)}</div>`; }
 }
 
+function openPipelineForm(id){
+  const p = id ? byId(db.pipelines,id) : {name:'',stages:[{name:'New',probability:10},{name:'Working',probability:40},{name:'Proposal',probability:75,sign:true},{name:'Won',probability:100,won:true,sign:true}],isDefault:false};
+  const original = JSON.parse(JSON.stringify(p.stages));
+  const stageRow = (st,i) => `<div class="stage-row" data-stage-row data-orig="${esc(original[i]?.name||'')}"><input class="st-name" value="${esc(st.name)}" placeholder="Stage name"><input class="st-prob" type="number" min="0" max="100" value="${st.probability}" title="Win probability %"><label class="inline" style="font-size:12px"><input type="checkbox" class="st-won" ${st.won?'checked':''}> Won</label><label class="inline" style="font-size:12px"><input type="checkbox" class="st-sign" ${st.sign?'checked':''}> Sign</label><button class="x st-del" type="button" title="Remove">✕</button></div>`;
+  openDrawer(`${dhead(id?'Edit pipeline':'New pipeline')}
+    <div class="grid2"><div class="field"><label>Name</label><input id="pp-name" value="${esc(p.name)}" placeholder="Partner deals"></div><div class="field"><label class="inline" style="margin-top:22px"><input type="checkbox" id="pp-default" ${p.isDefault?'checked':''} ${p.isDefault?'disabled':''}> Default pipeline</label></div></div>
+    <div class="stage-row" style="font-size:11px;color:var(--ink2)"><span>Stage</span><span>Prob %</span><span></span><span></span><span></span></div>
+    <div id="pp-stages">${p.stages.map(stageRow).join('')}</div>
+    <div class="row"><button class="btn sm" id="pp-add" type="button">Add stage</button></div>
+    <p class="note">Renaming a stage moves its deals; removing one sends its deals to the first stage.</p>
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="pp-save">${id?'Save pipeline':'Create pipeline'}</button>${id&&!p.isDefault?`<button class="btn ghost danger" id="pp-del">Delete</button>`:''}</div>`);
+  const box = drawer.querySelector('#pp-stages');
+  const bind = ()=>box.querySelectorAll('.st-del').forEach(b=>b.onclick=()=>b.closest('[data-stage-row]').remove());
+  bind();
+  drawer.querySelector('#pp-add').onclick = ()=>{ box.insertAdjacentHTML('beforeend', stageRow({name:'',probability:50},999)); bind(); };
+  drawer.querySelector('#pp-save').onclick = async ()=>{
+    const rows=[...box.querySelectorAll('[data-stage-row]')]; const renames={};
+    const stages = rows.map(r=>{ const name=r.querySelector('.st-name').value.trim(); const o=r.dataset.orig; if(o && name && o!==name) renames[o]=name; return { name, probability:r.querySelector('.st-prob').value, won:r.querySelector('.st-won').checked, sign:r.querySelector('.st-sign').checked }; }).filter(st=>st.name);
+    if(!dv('#pp-name')||stages.length<2){ toast('Name and at least two stages', true); return; }
+    await tryApi(()=>api(id?`/api/pipelines/${id}`:'/api/pipelines',{method:id?'PUT':'POST',body:{name:dv('#pp-name'),stages,renames,isDefault:drawer.querySelector('#pp-default').checked}}));
+    await refresh(); closeDrawer(); toast(id?'Pipeline saved':'Pipeline created');
+  };
+  const del = drawer.querySelector('#pp-del'); if(del) del.onclick = async ()=>{ if(!confirm(`Delete "${p.name}"? Its deals move to the default pipeline.`)) return; await tryApi(()=>api(`/api/pipelines/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); };
+}
+function openProductForm(id){
+  const p = id ? byId(db.products,id) : {name:'',category:'',description:'',unit:'each',billing:'one-time',price:0,tiers:[],active:true};
+  openDrawer(`${dhead(id?'Edit product':'New product')}
+    <div class="field"><label>Name</label><input id="pd-name" value="${esc(p.name)}"></div>
+    <div class="grid2">
+      <div class="field"><label>Category</label><input id="pd-cat" value="${esc(p.category||'')}" placeholder="Data, Email, SMS, Services…"></div>
+      <div class="field"><label>Billing</label><select id="pd-billing"><option value="one-time" ${p.billing!=='monthly'?'selected':''}>One-time / usage</option><option value="monthly" ${p.billing==='monthly'?'selected':''}>Monthly</option></select></div>
+      <div class="field"><label>Unit</label><select id="pd-unit">${['each','record','message','email','piece','month','1,000','hour'].map(u=>`<option ${u===p.unit?'selected':''}>${u}</option>`).join('')}</select></div>
+      <div class="field"><label>Base price ($)</label><input id="pd-price" type="number" min="0" step="any" value="${p.price}"></div>
+    </div>
+    <div class="field"><label>Description (shows on quotes)</label><input id="pd-desc" value="${esc(p.description||'')}"></div>
+    <div class="field"><label>Volume tiers (optional) — one per line as <code>min_qty, price</code>, e.g. <code>500000, 0.03</code></label><textarea id="pd-tiers" style="min-height:70px">${esc(p.tiers.map(t=>`${t.min}, ${t.price}`).join('\n'))}</textarea></div>
+    <div class="field"><label class="inline"><input type="checkbox" id="pd-active" ${p.active?'checked':''}> Active (available on deals)</label></div>
+    <div class="row"><button class="btn primary" id="pd-save">${id?'Save':'Add product'}</button></div>`);
+  drawer.querySelector('#pd-save').onclick = async ()=>{
+    const tiers = drawer.querySelector('#pd-tiers').value.split('\n').map(l=>l.split(',').map(x=>x.trim())).filter(a=>a.length>=2 && a[0]!=='').map(([min,price])=>({min,price}));
+    const body = { name:dv('#pd-name'), category:dv('#pd-cat'), billing:dv('#pd-billing'), unit:dv('#pd-unit'), price:dv('#pd-price'), description:dv('#pd-desc'), tiers, active:drawer.querySelector('#pd-active').checked };
+    if(!body.name){ toast('Name is required', true); return; }
+    await tryApi(()=>api(id?`/api/products/${id}`:'/api/products',{method:id?'PUT':'POST',body}));
+    await refresh(); closeDrawer(); toast(id?'Saved':'Product added');
+  };
+}
 function openPropertyForm(id){
   const p = id ? byId(db.properties,id) : {object:'contact',type:'text',options:[]};
   openDrawer(`${dhead(id?'Edit property':'New property')}
@@ -670,7 +759,7 @@ function renderAnalytics(){
   const d30 = Date.now() - 30*864e5;
   const newContacts30 = db.contacts.filter(c=>new Date(c.createdAt).getTime()>d30).length;
   const newDeals30 = all.filter(d=>new Date(d.createdAt).getTime()>d30).length;
-  const won = all.filter(d=>!d.lost && d.stage==='Closed won');
+  const won = all.filter(isWon);
   const won30 = won.filter(d=>new Date(d.wonAt||d.createdAt).getTime()>d30);
   const lost = all.filter(d=>d.lost);
   const open = all.filter(dealOpen);
@@ -679,8 +768,12 @@ function renderAnalytics(){
   const winRate = closed ? Math.round(won.length/closed*100) : 0;
   const avgDeal = won.length ? wonVal/won.length : 0;
   const awaiting = db.envelopes.filter(e=>!['completed','declined','voided'].includes(e.status)).length;
+  const wOpen = weighted(open);
+  const fmap = {}; open.forEach(d=>{ const k = d.expectedClose ? new Date(d.expectedClose+'T12:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'}) : 'No close date'; fmap[k]=(fmap[k]||0)+(Number(d.value)||0)*probOf(d)/100; });
+  const forecast = Object.entries(fmap).sort((a,b)=>{ if(a[0]==='No close date') return 1; if(b[0]==='No close date') return -1; return new Date('1 '+a[0])-new Date('1 '+b[0]); }).map(([k,v])=>[k, Math.round(v)]);
 
-  const reached = STAGES.map(s=> all.filter(d=> (d.stageHistory||[]).some(h=>h.stage===s) || d.stage===s).length);
+  const fpipe = defaultPipe(); const FST = stageNames(fpipe); const fdeals = all.filter(d=>String(d.pipelineId)===String(fpipe.id));
+  const reached = FST.map(s=> fdeals.filter(d=> (d.stageHistory||[]).some(h=>h.stage===s) || d.stage===s).length);
   const maxReach = Math.max(1,...reached);
 
   const days = [...Array(30)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-(29-i)); return d; });
@@ -701,6 +794,7 @@ function renderAnalytics(){
     <div class="kpi"><div class="v">${newDeals30}</div><div class="l">New deals, 30 days</div></div>
     <div class="kpi"><div class="v">${open.length}</div><div class="l">Open deals</div></div>
     <div class="kpi"><div class="v">${fmtMoney(openVal)}</div><div class="l">Open pipeline value</div></div>
+    <div class="kpi accent"><div class="v">${fmtMoney(wOpen)}</div><div class="l">Weighted forecast</div></div>
     <div class="kpi accent"><div class="v">${won30.length}</div><div class="l">Deals won, 30 days</div></div>
     <div class="kpi accent"><div class="v">${fmtMoney(wonVal)}</div><div class="l">Won revenue, all time</div></div>
     <div class="kpi"><div class="v">${winRate}%</div><div class="l">Win rate (${won.length} won / ${lost.length} lost)</div></div>
@@ -710,8 +804,9 @@ function renderAnalytics(){
   <div class="panels">
     <div class="panel chart"><h3>New deals per day</h3><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New deals per day, last 30 days">${bars}${labels}</svg></div>
     <div class="panel"><h3>Funnel — deals that reached each stage</h3>
-      ${STAGES.map((s,i)=>`<div class="fstep"><span>${esc(s)}</span><div class="f" style="width:${reached[i]/maxReach*100}%"></div><span class="pct">${reached[i]}${i&&reached[0]?` · ${Math.round(reached[i]/reached[0]*100)}%`:''}</span></div>`).join('')}</div>
-    <div class="panel"><h3>Deals by stage</h3><div class="bars">${barList([...STAGES.map(s=>[s, all.filter(d=>!d.lost&&d.stage===s).length]), ['Lost',lost.length]])}</div></div>
+      ${FST.map((s,i)=>`<div class="fstep"><span>${esc(s)}</span><div class="f" style="width:${reached[i]/maxReach*100}%"></div><span class="pct">${reached[i]}${i&&reached[0]?` · ${Math.round(reached[i]/reached[0]*100)}%`:''}</span></div>`).join('')}</div>
+    <div class="panel"><h3>Deals by stage (${esc(fpipe.name||'')})</h3><div class="bars">${barList([...FST.map(s=>[s, fdeals.filter(d=>!d.lost&&d.stage===s).length]), ['Lost',lost.length]])}</div></div>
+    <div class="panel"><h3>Forecast by expected close</h3><div class="bars">${barList(forecast, true, true)}</div></div>
     <div class="panel"><h3>Deals by vertical</h3><div class="bars">${barList(group('vertical'), true)}</div></div>
     <div class="panel"><h3>Deals by source</h3><div class="bars">${barList(group('source'))}</div></div>
     <div class="panel"><h3>Won revenue by owner</h3><div class="bars">${barList(byOwner, true, true)}</div></div>
@@ -725,6 +820,7 @@ function bindMain(){
   m.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>b.dataset.new==='sequence'?openSequenceForm():openForm(b.dataset.new));
   m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>{ if(r.dataset.open==='sequence') openSequenceForm(r.dataset.id); else openDetail(r.dataset.open, r.dataset.id); });
   m.querySelectorAll('[data-mine]').forEach(b=>b.onclick=()=>{ mineOnly=b.dataset.mine==='1'; render(); });
+  const ps = m.querySelector('#pipe-sel'); if(ps) ps.onchange = ()=>{ curPipeline = ps.value; render(); };
   m.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; render(); });
   m.querySelectorAll('[data-import]').forEach(b=>b.onclick=()=>openImport(b.dataset.import));
   bindTaskRows(m);
@@ -786,7 +882,7 @@ function openForm(kind, id, preset={}){
     ${id?'':`<div class="field"><label class="inline"><input type="checkbox" id="f-deal" checked> Also create a deal for this contact</label></div>
     <div id="f-dealbox" class="grid2">
       <div class="field"><label>Deal name</label><input id="f-dealname" placeholder="Defaults to company or contact name"></div>
-      <div class="field"><label>Stage</label><select id="f-stage">${opts(STAGES,'New lead')}</select></div>
+      <div class="field"><label>Stage</label><select id="f-stage">${opts(stageNames(defaultPipe()),stageNames(defaultPipe())[0])}</select></div>
       <div class="field"><label>Deal value ($)</label><input id="f-value" type="number" min="0" step="100"></div>
     </div>`}
     <div class="row"><button class="btn primary" id="f-save">${id?'Save changes':'Add contact'}</button>${id?`<button class="btn ghost danger" id="f-del">Delete</button>`:''}</div>`);
@@ -802,15 +898,17 @@ function openForm(kind, id, preset={}){
     const del = drawer.querySelector('#f-del');
     if(del) del.onclick = async ()=>{ if(confirm(`Delete ${fullName(c)}? Their deals stay, unlinked.`)){ await tryApi(()=>api(`/api/contacts/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
   } else if(kind==='deal'){
-    const d = id ? byId(db.deals,id) : Object.assign({stage:'New lead', ownerId: me.id}, preset);
+    const d = id ? byId(db.deals,id) : Object.assign({pipelineId: curPipeline||defaultPipe().id, ownerId: me.id}, preset);
+    if(!d.stage) d.stage = stageNames(byId(db.pipelines,d.pipelineId)||defaultPipe())[0];
     if(!id && d.contactId && !d.companyId){ d.companyId = (byId(db.contacts,d.contactId)||{}).companyId; }
     openDrawer(`${dhead(id?'Edit deal':'New deal')}
     <div class="field"><label>Deal name</label><input id="d-name" value="${esc(d.name||'')}" placeholder="e.g. Americor — Email + CTV program"></div>
     <div class="grid2">
       <div class="field"><label>Company</label><select id="d-company">${companyOpts(d.companyId)}</select></div>
       <div class="field"><label>Primary contact</label><select id="d-contact">${contactOpts(d.contactId, d.companyId)}</select></div>
-      <div class="field"><label>Stage</label><select id="d-stage">${opts(STAGES,d.stage)}</select></div>
-      <div class="field"><label>Deal value ($)</label><input id="d-value" type="number" min="0" step="100" value="${esc(d.value||'')}"></div>
+      <div class="field"><label>Pipeline</label><select id="d-pipeline">${pipeOpts(d.pipelineId)}</select></div>
+      <div class="field"><label>Stage</label><select id="d-stage">${opts(stageNames(byId(db.pipelines,d.pipelineId)||defaultPipe()),d.stage)}</select></div>
+      <div class="field"><label>Deal value ($)</label><input id="d-value" type="number" min="0" step="100" value="${esc(d.value||'')}" ${d.valueAuto?'disabled title="Set by line items"':''}>${d.valueAuto?'<div class="note">Calculated from line items</div>':''}</div>
       <div class="field"><label>Vertical</label><select id="d-vertical"><option value="">—</option>${opts(VERTICALS,d.vertical)}</select></div>
       <div class="field"><label>Source</label><select id="d-source"><option value="">—</option>${opts(SOURCES,d.source)}</select></div>
       <div class="field"><label>Owner</label><select id="d-owner">${ownerOpts(d.ownerId)}</select></div>
@@ -819,10 +917,11 @@ function openForm(kind, id, preset={}){
     ${customFieldsHtml('deal', d.custom, 'fd')}
     <div class="field"><label>Notes</label><textarea id="d-notes">${esc(d.notes||'')}</textarea></div>
     <div class="row"><button class="btn primary" id="d-save">${id?'Save changes':'Add deal'}</button>${id?`<button class="btn ghost danger" id="d-del">Delete</button>`:''}</div>`);
+    drawer.querySelector('#d-pipeline').onchange = e=>{ const pipe=byId(db.pipelines,e.target.value); const st=drawer.querySelector('#d-stage'); const cur=st.value; st.innerHTML = opts(stageNames(pipe), stageNames(pipe).includes(cur)?cur:stageNames(pipe)[0]); };
     drawer.querySelector('#d-company').onchange = e=>{ const sel=drawer.querySelector('#d-contact'); const cur=sel.value; sel.innerHTML = contactOpts(cur, e.target.value); if(!dv('#d-name') && e.target.value) drawer.querySelector('#d-name').value = companyName(e.target.value); };
     drawer.querySelector('#d-contact').onchange = e=>{ const c=byId(db.contacts,e.target.value); if(c && c.companyId && !dv('#d-company')){ drawer.querySelector('#d-company').value=c.companyId; } if(c && !dv('#d-name')) drawer.querySelector('#d-name').value = companyName(c.companyId)||fullName(c); };
     drawer.querySelector('#d-save').onclick = async ()=>{
-      const body = { name:dv('#d-name'), companyId:dv('#d-company'), contactId:dv('#d-contact'), stage:dv('#d-stage'), value:dv('#d-value'), vertical:dv('#d-vertical'), source:dv('#d-source'), ownerId:dv('#d-owner'), expectedClose:dv('#d-close'), notes:dv('#d-notes'), custom:readCustom() };
+      const body = { name:dv('#d-name'), companyId:dv('#d-company'), contactId:dv('#d-contact'), pipelineId:dv('#d-pipeline'), stage:dv('#d-stage'), value:dv('#d-value'), vertical:dv('#d-vertical'), source:dv('#d-source'), ownerId:dv('#d-owner'), expectedClose:dv('#d-close'), notes:dv('#d-notes'), custom:readCustom() };
       if(!body.name){ toast('Deal name is required', true); return; }
       const r = await tryApi(()=>api(id?`/api/deals/${id}`:'/api/deals',{method:id?'PUT':'POST',body}));
       await refresh(); openDetail('deal', id||r.id); toast(id?'Saved':'Deal added');
@@ -937,14 +1036,15 @@ async function openDetail(kind, id){
   if(kind==='deal'){
     const d = byId(db.deals,id); if(!d) return;
     const c = byId(db.contacts,d.contactId), co = byId(db.companies,d.companyId);
-    const envs = envsOf(d.id), canSign = SIGN_STAGES.includes(d.stage) && !d.lost;
+    const envs = envsOf(d.id), canSign = !!(stageObj(d)||{}).sign && !d.lost; const dpipe = pipeOf(d);
     const reopen = ()=>openDetail('deal',id);
     openDrawer(`${dhead(esc(d.name), [co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:'', c?`<a data-open-contact="${c.id}">${esc(fullName(c))}</a>`:''].filter(Boolean).join(' · '))}
     <div class="row"><button class="btn sm" id="d-edit">Edit</button>${c&&c.email?`<button class="btn sm" id="d-email">Email</button>`:''}${d.lost?`<button class="btn sm" id="d-reopen">Reopen deal</button>`:`<button class="btn sm danger" id="d-lost">Mark lost</button>`}
       ${canSign?`<button class="btn sm primary" id="d-sign">Send for signature</button>`:''}<span style="margin-left:auto">${stageTag(d)}</span></div>
-    ${!d.lost?`<div class="stages">${STAGES.map(s=>`<button data-stage="${esc(s)}" ${d.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
+    ${!d.lost?`<div class="stages">${stageNames(dpipe).map(s=>`<button data-stage="${esc(s)}" ${d.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
     <div class="section"><h3>Details</h3><div class="kv">
-      <span class="k">Deal value</span><span>${d.value?fmtMoney(d.value):'—'}</span>
+      <span class="k">Deal value</span><span>${d.value?fmtMoney(d.value):'—'}${d.valueAuto?' <span class="muted" style="font-size:12px">from line items</span>':''}${!d.lost&&!isWon(d)?` · <span class="muted" style="font-size:12px">${probOf(d)}% → ${fmtMoney((Number(d.value)||0)*probOf(d)/100)} weighted</span>`:''}</span>
+      <span class="k">Pipeline</span><span>${esc(dpipe.name||'')}</span>
       <span class="k">Owner</span><span>${esc(userName(d.ownerId)||'—')}</span>
       <span class="k">Expected close</span><span>${d.expectedClose?fmtDay(d.expectedClose):'—'}</span>
       <span class="k">Vertical</span><span>${esc(d.vertical||'—')}</span>
@@ -957,11 +1057,16 @@ async function openDetail(kind, id){
     <div class="section"><h3>Signatures${envs.length?` (${envs.length})`:''}</h3>
       ${envs.length ? envs.map(e=>`<div class="env"><div><b>${esc(e.templateName||'Document')}</b><div class="s">${esc(e.signerName)} &lt;${esc(e.signerEmail)}&gt; · ${envStatusLabel(e.status)} · ${e.status==='completed'&&e.completedAt?`signed ${fmtDate(e.completedAt)}`:`sent ${fmtDate(e.sentAt)} by ${esc(userName(e.sentBy))}`}</div></div>
         <div class="row">${['completed','declined','voided'].includes(e.status)?'':`<button class="btn sm" data-env-refresh="${e.id}">Refresh</button><button class="btn sm ghost danger" data-env-void="${e.id}">Void</button>`}</div></div>`).join('')
-      : `<div class="empty">${canSign ? (integrations.docusign?'Nothing sent yet.':'DocuSign isn\'t connected — an admin can set it up under Settings.') : `Available once the deal reaches ${SIGN_STAGES.join(' or ')}.`}</div>`}
+      : `<div class="empty">${canSign ? (integrations.docusign?'Nothing sent yet.':'DocuSign isn\'t connected — an admin can set it up under Settings.') : `Available once the deal reaches ${(dpipe.stages||[]).filter(st=>st.sign).map(st=>st.name).join(' or ')||'a signature stage'}.`}</div>`}
     </div>
+    <div class="section"><h3>Line items <span class="row"><select id="li-add" style="width:auto;max-width:240px;padding:4px 6px;font-size:13px"><option value="">Add from rate card…</option>${db.products.filter(p=>p.active).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}<option value="custom">Custom line</option></select></span></h3><div id="li-list"><div class="empty">Loading…</div></div></div>
+    <div class="section"><h3>Quotes <button class="btn sm primary" id="q-new">Generate quote</button></h3><div id="q-list"><div class="empty">Loading…</div></div></div>
     ${tasksSection('dealId', d.id, {dealId:d.id})}
     ${activitySection()}`);
     drawer.querySelector('#d-edit').onclick = ()=>openForm('deal',id);
+    drawer.querySelector('#li-add').onchange = async e=>{ const v=e.target.value; e.target.value=''; if(!v) return; if(v==='custom'){ await tryApi(()=>api(`/api/deals/${id}/items`,{method:'POST',body:{name:'Custom line',qty:1,unitPrice:0}})); } else { await tryApi(()=>api(`/api/deals/${id}/items`,{method:'POST',body:{productId:v,qty:1}})); } await refresh(); reopen(); };
+    drawer.querySelector('#q-new').onclick = ()=>openQuoteForm(d);
+    loadItems(d); loadQuotes(d);
     const de = drawer.querySelector('#d-email'); if(de) de.onclick = ()=>openCompose({contact:c, deal:d});
     drawer.querySelectorAll('[data-open-company]').forEach(a=>a.onclick=()=>openDetail('company', a.dataset.openCompany));
     drawer.querySelectorAll('[data-open-contact]').forEach(a=>a.onclick=()=>openDetail('contact', a.dataset.openContact));
@@ -1017,7 +1122,7 @@ async function openDetail(kind, id){
       <span class="k">Size</span><span>${esc(co.size||'—')}</span>
       <span class="k">Phone</span><span>${esc(co.phone||'—')}</span>
       <span class="k">Open pipeline</span><span>${fmtMoney(sum(ds.filter(dealOpen)))}</span>
-      <span class="k">Won revenue</span><span>${fmtMoney(sum(ds.filter(d=>!d.lost&&d.stage==='Closed won')))}</span>
+      <span class="k">Won revenue</span><span>${fmtMoney(sum(ds.filter(isWon)))}</span>
       ${customKv('company', co.custom)}
       ${co.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(co.notes)}</span>`:''}
     </div></div>
@@ -1035,6 +1140,86 @@ async function openDetail(kind, id){
   } else if(kind==='user'){
     openForm('user', id);
   }
+}
+
+/* ---------- line items ---------- */
+async function loadItems(d){
+  const el = drawer.querySelector('#li-list'); if(!el) return;
+  let items=[]; try{ items = await api(`/api/deals/${d.id}/items`); }catch(e){ el.innerHTML='<div class="empty">Couldn\'t load</div>'; return; }
+  if(!items.length){ el.innerHTML = `<div class="empty">No line items. Pick from the rate card to build the deal value; the quote is generated from these.</div>`; return; }
+  const one = items.filter(i=>i.billing!=='monthly'), mo = items.filter(i=>i.billing==='monthly');
+  const row = i => `<tr data-item="${i.id}">
+    <td><input class="li-name" value="${esc(i.name)}"><input class="li-desc" value="${esc(i.description||'')}" placeholder="Description" style="margin-top:3px;font-size:12px;color:var(--ink2)"></td>
+    <td class="num"><input class="li-qty" type="number" min="0" step="any" value="${i.qty}" style="width:90px"></td>
+    <td><select class="li-unit" style="width:80px">${['each','record','message','email','piece','month','1,000','hour'].map(u=>`<option ${u===i.unit?'selected':''}>${u}</option>`).join('')}</select></td>
+    <td class="num"><input class="li-price" type="number" min="0" step="any" value="${i.unitPrice}" style="width:90px">${i.productId?`<div><button class="btn sm ghost li-tier" style="padding:0 4px;font-size:11px" title="Re-price from volume tiers">tier</button></div>`:''}</td>
+    <td class="num">${i.billing==='monthly'?`<input class="li-months" type="number" min="1" max="60" value="${i.months}" style="width:60px"> mo`:'<span class="muted">one-time</span>'}</td>
+    <td class="num"><b>${fmtMoney(i.amount)}</b></td>
+    <td><button class="x li-del" title="Remove">✕</button></td></tr>`;
+  el.innerHTML = `<table class="items"><thead><tr><th>Item</th><th class="num">Qty</th><th>Unit</th><th class="num">Rate</th><th class="num">Term</th><th class="num">Amount</th><th></th></tr></thead><tbody>
+    ${one.map(row).join('')}${one.length?`<tr class="tot"><td colspan="5">One-time</td><td class="num">${fmtMoney(sum(one.map(i=>({value:i.amount}))))}</td><td></td></tr>`:''}
+    ${mo.map(row).join('')}${mo.length?`<tr class="tot"><td colspan="5">Monthly (full term)</td><td class="num">${fmtMoney(sum(mo.map(i=>({value:i.amount}))))}</td><td></td></tr>`:''}
+    <tr class="tot grand"><td colspan="5">Total program</td><td class="num">${fmtMoney(items.reduce((a,i)=>a+i.amount,0))}</td><td></td></tr>
+  </tbody></table><div class="note" style="margin-top:6px">Edits save on blur. Rates default from the rate card tiers for the quantity entered; override freely.</div>`;
+  el.querySelectorAll('tr[data-item]').forEach(tr=>{
+    const id = tr.dataset.item;
+    const save = async (body)=>{ await tryApi(()=>api(`/api/items/${id}`,{method:'PUT',body})); await refresh(); loadItems(d); refreshDealHeader(d.id); };
+    tr.querySelector('.li-name').onchange = e=>save({name:e.target.value});
+    tr.querySelector('.li-desc').onchange = e=>save({description:e.target.value});
+    tr.querySelector('.li-qty').onchange = e=>save({qty:e.target.value, repriceFromTiers: true});
+    tr.querySelector('.li-unit').onchange = e=>save({unit:e.target.value});
+    tr.querySelector('.li-price').onchange = e=>save({unitPrice:e.target.value});
+    const mo2 = tr.querySelector('.li-months'); if(mo2) mo2.onchange = e=>save({months:e.target.value});
+    const tier = tr.querySelector('.li-tier'); if(tier) tier.onclick = ()=>save({repriceFromTiers:true});
+    tr.querySelector('.li-del').onclick = async ()=>{ await tryApi(()=>api(`/api/items/${id}`,{method:'DELETE'})); await refresh(); loadItems(d); refreshDealHeader(d.id); };
+  });
+}
+function refreshDealHeader(dealId){ const d=byId(db.deals,dealId); if(!d) return; const kv=drawer.querySelector('.kv span:nth-child(2)'); if(kv) kv.innerHTML = `${d.value?fmtMoney(d.value):'—'}${d.valueAuto?' <span class="muted" style="font-size:12px">from line items</span>':''}`; }
+
+/* ---------- quotes ---------- */
+async function loadQuotes(d){
+  const el = drawer.querySelector('#q-list'); if(!el) return;
+  let qs=[]; try{ qs = await api(`/api/deals/${d.id}/quotes`); }catch(e){ el.innerHTML='<div class="empty">Couldn\'t load</div>'; return; }
+  el.innerHTML = qs.length ? qs.map(qt=>`<div class="quote"><div><b>${esc(qt.number)}</b> · ${esc(qt.title)}<div class="s">${fmtMoney(qt.total)}${qt.monthly?` (${fmtMoney(qt.oneTime)} one-time + ${fmtMoney(qt.monthly)} monthly term)`:''} · <span class="tag ${qt.status==='accepted'?'won':qt.status==='declined'?'lost':qt.status==='sent'?'m':''}">${qt.status}</span>${qt.sentTo?` to ${esc(qt.sentTo)} ${fmtDate(qt.sentAt)}`:''} · ${fmtDate(qt.createdAt)} by ${esc(userName(qt.createdBy))}</div></div>
+    <div class="row"><a class="btn sm" href="/api/quotes/${qt.id}.pdf" target="_blank" rel="noopener">View PDF</a><button class="btn sm" data-q-send="${qt.id}">Email</button>${qt.status!=='accepted'?`<button class="btn sm ghost" data-q-status="${qt.id}" data-status="accepted">Mark accepted</button>`:''}</div></div>`).join('')
+    : `<div class="empty">No quotes yet. Add line items, then Generate quote.</div>`;
+  el.querySelectorAll('[data-q-send]').forEach(b=>b.onclick=()=>openQuoteSend(d, qs.find(x=>String(x.id)===b.dataset.qSend)));
+  el.querySelectorAll('[data-q-status]').forEach(b=>b.onclick=async ()=>{ await tryApi(()=>api(`/api/quotes/${b.dataset.qStatus}/status`,{method:'PATCH',body:{status:b.dataset.status}})); loadQuotes(d); toast('Updated'); });
+}
+function openQuoteForm(d){
+  const c = byId(db.contacts,d.contactId), co = byId(db.companies,d.companyId);
+  const validUntil = new Date(Date.now()+30*864e5).toISOString().slice(0,10);
+  openDrawer(`${dhead('Generate quote', esc(d.name))}
+    <div class="field"><label>Title</label><input id="qf-title" value="${esc((co?co.name:c?fullName(c):'Client')+' — '+d.name)}"></div>
+    <div class="field"><label>Overview (optional, appears above the investment table)</label><textarea id="qf-intro" style="min-height:110px" placeholder="What we're proposing and why — program summary, audience, cadence, expected outcomes."></textarea></div>
+    <div class="grid2"><div class="field"><label>Valid until</label><input id="qf-valid" type="date" value="${validUntil}"></div></div>
+    <div class="field"><label>Terms</label><textarea id="qf-terms" style="min-height:110px">All deployments are prepaid. Invoicing is weekly for usage-based services unless otherwise agreed. Data hygiene and additional data appends are billed separately. Media is billed at cost; a 3.5% processing fee applies to credit card payments (none for ACH). Postage is estimated and billed at actual. Pricing follows the published 27 Squared Marketing rate grids and is valid through the date shown above.</textarea></div>
+    <p class="note">The PDF is built from the deal's current line items, numbered Q-${new Date().getFullYear()}-nnnn, and stored on the deal. Generate again after changing line items.</p>
+    <div class="row"><button class="btn primary" id="qf-go">Generate PDF</button><button class="btn ghost" data-close>Cancel</button></div>`);
+  drawer.querySelector('#qf-go').onclick = async ()=>{
+    const btn=drawer.querySelector('#qf-go'); btn.disabled=true; btn.textContent='Building…';
+    try{ const qt = await api(`/api/deals/${d.id}/quotes`,{method:'POST',body:{title:dv('#qf-title'),intro:drawer.querySelector('#qf-intro').value.trim(),terms:drawer.querySelector('#qf-terms').value.trim(),validUntil:dv('#qf-valid')}}); await refresh(); openDetail('deal', d.id); toast(`${qt.number} generated`); window.open(`/api/quotes/${qt.id}.pdf`,'_blank'); }
+    catch(e){ toast(e.message,true); btn.disabled=false; btn.textContent='Generate PDF'; }
+  };
+}
+function openQuoteSend(d, qt){
+  const c = byId(db.contacts,d.contactId);
+  openDrawer(`${dhead(`Email ${esc(qt.number)}`, esc(qt.title))}
+    ${!integrations.email?'<div class="warnbox">Email isn\'t configured. An admin can set it up under Settings.</div>':''}
+    <div class="field"><label>To</label><input id="qs-to" type="email" value="${esc(c?.email||qt.sentTo||'')}"></div>
+    <div class="field"><label>Subject</label><input id="qs-subject" value="Proposal ${esc(qt.number)}: ${esc(qt.title)}"></div>
+    <div class="field"><label>Message</label><textarea id="qs-body" style="min-height:140px">Hi ${esc(c?.first||'there')},
+
+Attached is our proposal for ${esc(d.name)}. The investment summary is on page 1; terms follow.
+
+Happy to walk through it whenever suits you.</textarea></div>
+    <p class="note">Sends from connect@ as you, with the PDF attached, and logs on the deal.</p>
+    <div class="row"><button class="btn primary" id="qs-go" ${integrations.email?'':'disabled'}>Send</button><button class="btn ghost" data-close>Cancel</button></div>`);
+  drawer.querySelector('#qs-go').onclick = async ()=>{
+    const btn=drawer.querySelector('#qs-go'); btn.disabled=true; btn.textContent='Sending…';
+    try{ await api(`/api/quotes/${qt.id}/send`,{method:'POST',body:{to:dv('#qs-to'),subject:dv('#qs-subject'),body:drawer.querySelector('#qs-body').value.trim()}}); await refresh(); openDetail('deal', d.id); toast('Quote sent'); }
+    catch(e){ toast(e.message,true); btn.disabled=false; btn.textContent='Send'; }
+  };
 }
 
 /* ---------- DocuSign send ---------- */
@@ -1117,7 +1302,7 @@ function openImport(kind){
       map.innerHTML = `<p class="note"><b>${data.length}</b> rows, ${headers.length} columns. Map each CRM field to a column:</p>
         <table class="maptable"><tbody>${fields.map(([k,label,re])=>`<tr><td style="width:40%">${esc(label)}</td><td><select data-map="${k}"><option value="-1">— skip —</option>${headers.map((h,i)=>`<option value="${i}" ${guess(re)===i?'selected':''}>${esc(h)}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table>
         ${kind==='contacts'?`<div class="field" style="margin-top:12px"><label class="inline"><input type="checkbox" id="i-deals" checked> Create a deal for each imported contact</label></div>
-        <div class="grid2"><div class="field"><label>Deal stage</label><select id="i-stage">${opts(STAGES,'New lead')}</select></div><div class="field"><label>Owner</label><select id="i-owner">${ownerOpts(me.id)}</select></div></div>`:''}
+        <div class="grid2"><div class="field"><label>Deal stage</label><select id="i-stage">${opts(stageNames(defaultPipe()),stageNames(defaultPipe())[0])}</select></div><div class="field"><label>Owner</label><select id="i-owner">${ownerOpts(me.id)}</select></div></div>`:''}
         <div class="field"><label>Preview (first 3 rows)</label><div class="preview" id="i-preview"></div></div>
         <div class="row"><button class="btn primary" id="i-go">Import ${data.length} rows</button></div>`;
       const build = ()=> data.map(row=>{ const o={custom:{}}; fields.forEach(([k])=>{ const i=Number(drawer.querySelector(`[data-map="${k}"]`).value); const val = i>=0 ? (row[i]||'').trim() : ''; if(k.startsWith('custom.')) o.custom[k.slice(7)]=val; else o[k]=val; }); return o; });

@@ -11,6 +11,8 @@ types.setTypeParser(1082, v => v); // DATE columns as 'YYYY-MM-DD' strings, not 
 const mailer = require('./lib/mail');
 const docusign = require('./lib/docusign');
 const engage = require('./lib/engage');
+const catalog = require('./lib/catalog');
+const quotePdf = require('./lib/quote-pdf');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
@@ -28,8 +30,16 @@ const pool = new Pool({
 });
 const q = (text, params) => pool.query(text, params);
 
-const STAGES = ['New lead', 'Contacted', 'Qualified', 'Proposal sent', 'Closed won'];
-const SIGN_STAGES = ['Proposal sent', 'Closed won'];
+/* ---------- pipelines (cached) ---------- */
+let PIPES = [];
+async function loadPipelines() { PIPES = (await q('SELECT * FROM pipelines ORDER BY sort, id')).rows; }
+const defaultPipeline = () => PIPES.find(p => p.is_default) || PIPES[0];
+const pipelineById = id => PIPES.find(p => String(p.id) === String(id)) || defaultPipeline();
+const stageOf = (pipe, name) => (pipe?.stages || []).find(st => st.name === name) || null;
+const isWon = (pipe, name) => !!stageOf(pipe, name)?.won;
+const canSign = (pipe, name) => !!stageOf(pipe, name)?.sign;
+const resolveStage = (pipe, name) => stageOf(pipe, name) ? name : (pipe.stages[0]?.name || 'New lead');
+const STAGE_NAMES = pipe => (pipe?.stages || []).map(st => st.name);
 
 /* ---------- app ---------- */
 const app = express();
@@ -74,7 +84,13 @@ const dealOut = r => ({
   vertical: r.vertical, source: r.source, expectedClose: r.expected_close || null, notes: r.notes,
   lost: r.lost, lostAt: r.lost_at, wonAt: r.won_at, stageHistory: r.stage_history || [],
   ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at, custom: r.custom || {},
+  pipelineId: r.pipeline_id, valueAuto: r.value_auto, won: isWon(pipelineById(r.pipeline_id), r.stage),
+  probability: r.lost ? 0 : (stageOf(pipelineById(r.pipeline_id), r.stage)?.probability ?? 0),
 });
+const pipelineOut = r => ({ id: r.id, name: r.name, stages: r.stages || [], isDefault: r.is_default, sort: r.sort });
+const productOut = r => ({ id: r.id, name: r.name, category: r.category, description: r.description, unit: r.unit, billing: r.billing, price: Number(r.price), tiers: r.tiers || [], active: r.active, sort: r.sort });
+const itemOut = r => ({ id: r.id, dealId: r.deal_id, productId: r.product_id, name: r.name, description: r.description, unit: r.unit, billing: r.billing, qty: Number(r.qty), unitPrice: Number(r.unit_price), months: r.months, amount: Number(r.amount), sort: r.sort });
+const quoteOut = r => ({ id: r.id, dealId: r.deal_id, number: r.number, title: r.title, intro: r.intro, terms: r.terms, items: r.items || [], oneTime: Number(r.one_time), monthly: Number(r.monthly), total: Number(r.total), validUntil: r.valid_until, status: r.status, sentTo: r.sent_to, sentAt: r.sent_at, createdBy: r.created_by, createdAt: r.created_at, hasPdf: !!r.has_pdf });
 const taskOut = r => ({
   id: r.id, title: r.title, dueAt: r.due_at || null, done: r.done, doneAt: r.done_at,
   dealId: r.deal_id, contactId: r.contact_id, assigneeId: r.assignee_id, createdBy: r.created_by, createdAt: r.created_at,
@@ -182,8 +198,10 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     enrollments: enrollments.rows.map(enrollmentOut),
     properties: PROPS.map(propOut),
     mergeTags: engage.MERGE_TAGS,
-    stages: STAGES,
-    signStages: SIGN_STAGES,
+    pipelines: PIPES.map(pipelineOut),
+    products: (await q('SELECT * FROM products ORDER BY sort, id')).rows.map(productOut),
+    stages: STAGE_NAMES(defaultPipeline()),
+    signStages: (defaultPipeline()?.stages || []).filter(st => st.sign).map(st => st.name),
     integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured() },
   });
 }));
@@ -227,7 +245,7 @@ app.post('/api/contacts', requireAuth, wrap(async (req, res) => {
   if (req.body.createDeal) {
     deal = await createDeal({
       name: str(req.body.dealName) || (contact.company_id ? (await q('SELECT name FROM companies WHERE id=$1', [contact.company_id])).rows[0]?.name : '') || `${f.first} ${f.last}`.trim(),
-      contactId: contact.id, companyId: contact.company_id, stage: STAGES.includes(req.body.stage) ? req.body.stage : 'New lead',
+      contactId: contact.id, companyId: contact.company_id, pipelineId: defaultPipeline().id, stage: resolveStage(defaultPipeline(), req.body.stage),
       value: num(req.body.value), vertical: f.vertical, source: f.source, ownerId: contact.owner_id, expectedClose: null, notes: '',
     }, req.session.user.id);
   }
@@ -252,17 +270,18 @@ app.delete('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
 /* ---------- deals ---------- */
 const dealFields = b => ({
   name: str(b.name), contactId: intOrNull(b.contactId), companyId: intOrNull(b.companyId),
-  stage: STAGES.includes(b.stage) ? b.stage : 'New lead', value: num(b.value), vertical: str(b.vertical), source: str(b.source),
+  pipelineId: pipelineById(b.pipelineId).id, stage: resolveStage(pipelineById(b.pipelineId), b.stage), value: num(b.value), vertical: str(b.vertical), source: str(b.source),
   expectedClose: dateOrNull(b.expectedClose), notes: str(b.notes), ownerId: intOrNull(b.ownerId), custom: cleanCustom('deal', b.custom),
 });
 
 async function createDeal(f, actorId) {
   const history = JSON.stringify([{ stage: f.stage, at: new Date().toISOString(), by: actorId }]);
-  const wonAt = f.stage === 'Closed won' ? new Date() : null;
+  const pipe = pipelineById(f.pipelineId);
+  const wonAt = isWon(pipe, f.stage) ? new Date() : null;
   const { rows } = await q(
-    `INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,expected_close,notes,owner_id,created_by,stage_history,won_at,custom)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt, JSON.stringify(f.custom || {})]);
+    `INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,expected_close,notes,owner_id,created_by,stage_history,won_at,custom,pipeline_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt, JSON.stringify(f.custom || {}), pipe.id]);
   const d = rows[0];
   if (d.owner_id && String(d.owner_id) !== String(actorId)) {
     const actor = await userById(actorId);
@@ -287,16 +306,19 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
   if (!cur) return res.status(404).json({ error: 'Deal not found' });
   let history = cur.stage_history || [], wonAt = cur.won_at;
   const me = req.session.user;
-  if (cur.stage !== f.stage) {
-    history = [...history, { stage: f.stage, at: new Date().toISOString(), by: me.id }];
-    if (f.stage === 'Closed won') wonAt = new Date();
-    await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${f.stage}` });
+  const pipe = pipelineById(f.pipelineId);
+  if (cur.stage !== f.stage || String(cur.pipeline_id) !== String(pipe.id)) {
+    history = [...history, { stage: f.stage, pipelineId: pipe.id, at: new Date().toISOString(), by: me.id }];
+    if (isWon(pipe, f.stage)) wonAt = new Date();
+    await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${f.stage}${String(cur.pipeline_id) !== String(pipe.id) ? ` (${pipe.name} pipeline)` : ''}` });
+    if (isWon(pipe, f.stage) && cur.contact_id) await engage.stopAllForContact(cur.contact_id, 'stopped', 'deal closed won');
     await notifyUser(cur.owner_id, `${cur.name}: moved to ${f.stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(f.stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   }
+  const value = cur.value_auto ? cur.value : f.value; // line items own the value when present
   const { rows } = await q(
-    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,updated_at=now()
+    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,pipeline_id=$15,updated_at=now()
      WHERE id=$13 RETURNING *`,
-    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom)]);
+    [f.name, f.contactId, f.companyId, f.stage, value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom), pipe.id]);
   if (f.ownerId && String(f.ownerId) !== String(cur.owner_id)) {
     await notifyUser(f.ownerId, `Deal assigned to you: ${f.name}`, `<p>${esc(me.name)} assigned you the deal <b>${esc(f.name)}</b> (${esc(f.stage)}).</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   }
@@ -305,16 +327,17 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
 
 app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
   const stage = req.body.stage;
-  if (!STAGES.includes(stage)) return res.status(400).json({ error: 'Unknown stage' });
   const cur = await dealById(req.params.id);
   if (!cur) return res.status(404).json({ error: 'Deal not found' });
+  const pipe = pipelineById(cur.pipeline_id);
+  if (!stageOf(pipe, stage)) return res.status(400).json({ error: 'Unknown stage for this pipeline' });
   if (cur.stage === stage && !cur.lost) return res.json(dealOut(cur));
   const me = req.session.user;
   const history = [...(cur.stage_history || []), { stage, at: new Date().toISOString(), by: me.id }];
-  const wonAt = stage === 'Closed won' ? new Date() : cur.won_at;
+  const wonAt = isWon(pipe, stage) ? new Date() : cur.won_at;
   const { rows } = await q('UPDATE deals SET stage=$1, lost=FALSE, lost_at=NULL, stage_history=$2, won_at=$3, updated_at=now() WHERE id=$4 RETURNING *', [stage, JSON.stringify(history), wonAt, cur.id]);
   await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${stage}` });
-  if (stage === 'Closed won' && cur.contact_id) await engage.stopAllForContact(cur.contact_id, 'stopped', 'deal closed won');
+  if (isWon(pipe, stage) && cur.contact_id) await engage.stopAllForContact(cur.contact_id, 'stopped', 'deal closed won');
   await notifyUser(cur.owner_id, `${cur.name}: moved to ${stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   res.json(dealOut(rows[0]));
 }));
@@ -408,7 +431,7 @@ app.post('/api/import/companies', requireAuth, wrap(async (req, res) => {
 
 app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 5000) : [];
-  const createDeals = !!req.body.createDeals, stage = STAGES.includes(req.body.stage) ? req.body.stage : 'New lead';
+  const createDeals = !!req.body.createDeals, stage = resolveStage(defaultPipeline(), req.body.stage), pipeId = defaultPipeline().id;
   const ownerId = intOrNull(req.body.ownerId) || req.session.user.id;
   const cache = new Map(); let created = 0, skipped = 0, companies = 0, deals = 0;
   const existingEmails = new Set((await q("SELECT lower(email) AS e FROM contacts WHERE email<>''")).rows.map(x => x.e));
@@ -427,10 +450,10 @@ app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
     if (email) existingEmails.add(email);
     created++;
     if (createDeals) {
-      await q(`INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,owner_id,created_by,stage_history)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      await q(`INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,owner_id,created_by,stage_history,pipeline_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [coName || `${first} ${last}`.trim(), ins.rows[0].id, companyId, stage, num(r.value), str(r.vertical), str(r.source) || 'Import', ownerId, req.session.user.id,
-          JSON.stringify([{ stage, at: new Date().toISOString(), by: req.session.user.id }])]);
+          JSON.stringify([{ stage, at: new Date().toISOString(), by: req.session.user.id }]), pipeId]);
       deals++;
     }
   }
@@ -550,6 +573,205 @@ app.post('/api/enrollments/:id/stop', requireAuth, wrap(async (req, res) => {
   res.json(enrollmentOut(e));
 }));
 
+/* ---------- pipelines (admin) ---------- */
+const cleanStages = stages => (Array.isArray(stages) ? stages : []).map(st => ({
+  name: str(st.name).slice(0, 40), probability: Math.max(0, Math.min(100, Math.round(Number(st.probability) || 0))), won: !!st.won, sign: !!st.sign,
+})).filter(st => st.name).filter((st, i, arr) => arr.findIndex(x => x.name === st.name) === i).slice(0, 10);
+
+app.post('/api/pipelines', requireAdmin, wrap(async (req, res) => {
+  const name = str(req.body.name), stages = cleanStages(req.body.stages);
+  if (!name || stages.length < 2) return res.status(400).json({ error: 'A pipeline needs a name and at least two stages' });
+  const sort = (await q('SELECT COALESCE(MAX(sort),0)+1 AS s FROM pipelines')).rows[0].s;
+  const { rows } = await q('INSERT INTO pipelines (name, stages, sort) VALUES ($1,$2,$3) RETURNING *', [name, JSON.stringify(stages), sort]);
+  await loadPipelines(); res.json(pipelineOut(rows[0]));
+}));
+app.put('/api/pipelines/:id', requireAdmin, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM pipelines WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Pipeline not found' });
+  const name = str(req.body.name) || cur.name;
+  const stages = req.body.stages != null ? cleanStages(req.body.stages) : cur.stages;
+  if (stages.length < 2) return res.status(400).json({ error: 'At least two stages are required' });
+  // Renames: req.body.renames = {oldName: newName} moves deals along
+  const renames = req.body.renames && typeof req.body.renames === 'object' ? req.body.renames : {};
+  for (const [from, to] of Object.entries(renames)) if (str(from) && str(to) && from !== to) await q('UPDATE deals SET stage=$3 WHERE pipeline_id=$1 AND stage=$2', [cur.id, from, to]);
+  // Deals sitting on a removed stage fall back to the first stage
+  const names = stages.map(st => st.name);
+  await q('UPDATE deals SET stage=$2 WHERE pipeline_id=$1 AND NOT (stage = ANY($3))', [cur.id, names[0], names]);
+  if (req.body.isDefault) { await q('UPDATE pipelines SET is_default=FALSE'); }
+  const { rows } = await q('UPDATE pipelines SET name=$2, stages=$3, is_default=CASE WHEN $4 THEN TRUE ELSE is_default END WHERE id=$1 RETURNING *', [cur.id, name, JSON.stringify(stages), !!req.body.isDefault]);
+  await loadPipelines(); res.json(pipelineOut(rows[0]));
+}));
+app.delete('/api/pipelines/:id', requireAdmin, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM pipelines WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Pipeline not found' });
+  if (cur.is_default || PIPES.length < 2) return res.status(400).json({ error: "Can't delete the default or only pipeline" });
+  const def = defaultPipeline();
+  await q('UPDATE deals SET pipeline_id=$2, stage=$3 WHERE pipeline_id=$1', [cur.id, def.id, def.stages[0].name]);
+  await q('DELETE FROM pipelines WHERE id=$1', [cur.id]);
+  await loadPipelines(); res.json({ ok: true });
+}));
+
+/* ---------- products (admin) ---------- */
+const UNITS = ['each', 'record', 'message', 'email', 'piece', 'month', '1,000', 'hour'];
+const productFields = b => ({
+  name: str(b.name).slice(0, 120), category: str(b.category).slice(0, 60), description: str(b.description).slice(0, 500),
+  unit: UNITS.includes(b.unit) ? b.unit : 'each', billing: b.billing === 'monthly' ? 'monthly' : 'one-time', price: num(b.price),
+  tiers: (Array.isArray(b.tiers) ? b.tiers : []).map(t => ({ min: num(t.min), price: num(t.price) })).filter(t => Number.isFinite(t.min)).sort((a, b2) => a.min - b2.min).slice(0, 12),
+  active: b.active !== false,
+});
+app.post('/api/products', requireAdmin, wrap(async (req, res) => {
+  const f = productFields(req.body); if (!f.name) return res.status(400).json({ error: 'Product name is required' });
+  const sort = (await q('SELECT COALESCE(MAX(sort),0)+1 AS s FROM products')).rows[0].s;
+  const { rows } = await q('INSERT INTO products (name,category,description,unit,billing,price,tiers,active,sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [f.name, f.category, f.description, f.unit, f.billing, f.price, JSON.stringify(f.tiers), f.active, sort]);
+  res.json(productOut(rows[0]));
+}));
+app.put('/api/products/:id', requireAdmin, wrap(async (req, res) => {
+  const f = productFields(req.body); if (!f.name) return res.status(400).json({ error: 'Product name is required' });
+  const { rows } = await q('UPDATE products SET name=$2,category=$3,description=$4,unit=$5,billing=$6,price=$7,tiers=$8,active=$9,updated_at=now() WHERE id=$1 RETURNING *', [req.params.id, f.name, f.category, f.description, f.unit, f.billing, f.price, JSON.stringify(f.tiers), f.active]);
+  if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
+  res.json(productOut(rows[0]));
+}));
+app.delete('/api/products/:id', requireAdmin, wrap(async (req, res) => {
+  await q('DELETE FROM products WHERE id=$1', [req.params.id]); res.json({ ok: true });
+}));
+
+/* ---------- deal line items ---------- */
+const lineAmount = it => Math.round(Number(it.qty) * Number(it.unit_price ?? it.unitPrice) * (it.billing === 'monthly' ? Math.max(1, Number(it.months) || 1) : 1) * 100) / 100;
+async function recalcDeal(dealId) {
+  const { rows } = await q('SELECT * FROM deal_items WHERE deal_id=$1', [dealId]);
+  if (!rows.length) { await q('UPDATE deals SET value_auto=FALSE, updated_at=now() WHERE id=$1', [dealId]); return null; }
+  const total = rows.reduce((a, r) => a + Number(r.amount), 0);
+  await q('UPDATE deals SET value=$2, value_auto=TRUE, updated_at=now() WHERE id=$1', [dealId, total]);
+  return total;
+}
+app.get('/api/deals/:id/items', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT * FROM deal_items WHERE deal_id=$1 ORDER BY sort, id', [req.params.id]);
+  res.json(rows.map(itemOut));
+}));
+app.post('/api/deals/:id/items', requireAuth, wrap(async (req, res) => {
+  const d = await dealById(req.params.id); if (!d) return res.status(404).json({ error: 'Deal not found' });
+  const product = req.body.productId ? (await q('SELECT * FROM products WHERE id=$1', [req.body.productId])).rows[0] : null;
+  const qty = Math.max(0, Number(req.body.qty) || 1);
+  const unitPrice = req.body.unitPrice != null && req.body.unitPrice !== '' ? num(req.body.unitPrice) : (product ? catalog.priceFor(product, qty) : 0);
+  const it = {
+    name: str(req.body.name) || product?.name || 'Line item', description: req.body.description != null ? str(req.body.description) : (product?.description || ''),
+    unit: str(req.body.unit) || product?.unit || 'each', billing: (req.body.billing || product?.billing) === 'monthly' ? 'monthly' : 'one-time',
+    qty, unit_price: unitPrice, months: Math.max(1, Math.min(60, Math.round(Number(req.body.months) || 1))),
+  };
+  it.amount = lineAmount(it);
+  const sort = (await q('SELECT COALESCE(MAX(sort),0)+1 AS s FROM deal_items WHERE deal_id=$1', [d.id])).rows[0].s;
+  const { rows } = await q('INSERT INTO deal_items (deal_id,product_id,name,description,unit,billing,qty,unit_price,months,amount,sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',
+    [d.id, product?.id || null, it.name, it.description, it.unit, it.billing, it.qty, it.unit_price, it.months, it.amount, sort]);
+  const total = await recalcDeal(d.id);
+  res.json({ item: itemOut(rows[0]), dealValue: total });
+}));
+app.put('/api/items/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM deal_items WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Line item not found' });
+  const product = cur.product_id ? (await q('SELECT * FROM products WHERE id=$1', [cur.product_id])).rows[0] : null;
+  const qty = req.body.qty != null ? Math.max(0, Number(req.body.qty) || 0) : Number(cur.qty);
+  let unitPrice = req.body.unitPrice != null && req.body.unitPrice !== '' ? num(req.body.unitPrice) : Number(cur.unit_price);
+  if (req.body.repriceFromTiers && product) unitPrice = catalog.priceFor(product, qty);
+  const it = {
+    name: req.body.name != null ? str(req.body.name) || cur.name : cur.name, description: req.body.description != null ? str(req.body.description) : cur.description,
+    unit: req.body.unit != null ? str(req.body.unit) || cur.unit : cur.unit, billing: req.body.billing != null ? (req.body.billing === 'monthly' ? 'monthly' : 'one-time') : cur.billing,
+    qty, unit_price: unitPrice, months: req.body.months != null ? Math.max(1, Math.min(60, Math.round(Number(req.body.months) || 1))) : cur.months,
+  };
+  it.amount = lineAmount(it);
+  const { rows } = await q('UPDATE deal_items SET name=$2,description=$3,unit=$4,billing=$5,qty=$6,unit_price=$7,months=$8,amount=$9 WHERE id=$1 RETURNING *',
+    [cur.id, it.name, it.description, it.unit, it.billing, it.qty, it.unit_price, it.months, it.amount]);
+  const total = await recalcDeal(cur.deal_id);
+  res.json({ item: itemOut(rows[0]), dealValue: total });
+}));
+app.delete('/api/items/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM deal_items WHERE id=$1', [req.params.id])).rows[0];
+  if (cur) { await q('DELETE FROM deal_items WHERE id=$1', [cur.id]); await recalcDeal(cur.deal_id); }
+  res.json({ ok: true, dealValue: cur ? (await dealById(cur.deal_id))?.value : null });
+}));
+app.post('/api/deals/:id/value', requireAuth, wrap(async (req, res) => {
+  // Detach from line items and set a manual value
+  const { rows } = await q('UPDATE deals SET value=$2, value_auto=FALSE, updated_at=now() WHERE id=$1 RETURNING *', [req.params.id, num(req.body.value)]);
+  if (!rows[0]) return res.status(404).json({ error: 'Deal not found' });
+  res.json(dealOut(rows[0]));
+}));
+
+/* ---------- quotes ---------- */
+const DEFAULT_TERMS = `All deployments are prepaid. Invoicing is weekly for usage-based services unless otherwise agreed. Data hygiene and additional data appends are billed separately. Media is billed at cost; a 3.5% processing fee applies to credit card payments (none for ACH). Postage is estimated and billed at actual. Pricing follows the published 27 Squared Marketing rate grids and is valid through the date shown above.`;
+async function quoteContext(d) {
+  const contact = d.contact_id ? (await q('SELECT * FROM contacts WHERE id=$1', [d.contact_id])).rows[0] : null;
+  const company = d.company_id ? (await q('SELECT * FROM companies WHERE id=$1', [d.company_id])).rows[0] : null;
+  return { contact, company };
+}
+app.get('/api/deals/:id/quotes', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at, (pdf IS NOT NULL) AS has_pdf FROM quotes WHERE deal_id=$1 ORDER BY created_at DESC', [req.params.id]);
+  res.json(rows.map(quoteOut));
+}));
+app.post('/api/deals/:id/quotes', requireAuth, wrap(async (req, res) => {
+  const d = await dealById(req.params.id); if (!d) return res.status(404).json({ error: 'Deal not found' });
+  const items = (await q('SELECT * FROM deal_items WHERE deal_id=$1 ORDER BY sort, id', [d.id])).rows;
+  if (!items.length) return res.status(400).json({ error: 'Add line items to the deal before generating a quote' });
+  const { contact, company } = await quoteContext(d);
+  const user = (await q('SELECT * FROM users WHERE id=$1', [req.session.user.id])).rows[0];
+  const year = new Date().getFullYear();
+  const n = (await q("SELECT COUNT(*)::int AS n FROM quotes WHERE number LIKE $1", [`Q-${year}-%`])).rows[0].n + 1;
+  const number = `Q-${year}-${String(n).padStart(4, '0')}`;
+  const snapshot = items.map(itemOut).map(i => ({ name: i.name, description: i.description, unit: i.unit, billing: i.billing, qty: i.qty, unit_price: i.unitPrice, months: i.months, amount: i.amount }));
+  const oneTime = snapshot.filter(i => i.billing !== 'monthly').reduce((a, i) => a + i.amount, 0);
+  const monthly = snapshot.filter(i => i.billing === 'monthly').reduce((a, i) => a + i.amount, 0);
+  const validUntil = dateOrNull(req.body.validUntil) || new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const quote = {
+    number, title: str(req.body.title) || `${company?.name || contact?.first_name || 'Client'} — ${d.name}`, intro: str(req.body.intro), terms: req.body.terms != null ? str(req.body.terms) : DEFAULT_TERMS,
+    items: snapshot, one_time: oneTime, monthly, total: oneTime + monthly, valid_until: validUntil, created_at: new Date(),
+  };
+  const pdf = await quotePdf.build(quote, {
+    contactName: contact ? [contact.first_name, contact.last_name].filter(Boolean).join(' ') : '', contactTitle: contact?.title || '', companyName: company?.name || '',
+    userName: user.name, userEmail: user.email,
+  });
+  const { rows } = await q(
+    `INSERT INTO quotes (deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, pdf, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at, TRUE AS has_pdf`,
+    [d.id, number, quote.title, quote.intro, quote.terms, JSON.stringify(snapshot), oneTime, monthly, oneTime + monthly, validUntil, pdf, user.id]);
+  await logActivity({ dealId: d.id, contactId: d.contact_id, userId: user.id, type: 'Proposal', text: `Generated quote ${number} — ${quote.title} (${'$' + (oneTime + monthly).toLocaleString('en-US', { maximumFractionDigits: 0 })})` });
+  res.json(quoteOut(rows[0]));
+}));
+app.get('/api/quotes/:id.pdf', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT number, title, pdf FROM quotes WHERE id=$1', [req.params.id]);
+  const qt = rows[0]; if (!qt || !qt.pdf) return res.status(404).json({ error: 'Quote not found' });
+  res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `${req.query.download ? 'attachment' : 'inline'}; filename="27SQ ${qt.number}.pdf"` });
+  res.send(qt.pdf);
+}));
+app.post('/api/quotes/:id/send', requireAuth, wrap(async (req, res) => {
+  if (!mailer.configured()) return res.status(400).json({ error: 'Email is not configured (Settings)' });
+  const qt = (await q('SELECT * FROM quotes WHERE id=$1', [req.params.id])).rows[0];
+  if (!qt) return res.status(404).json({ error: 'Quote not found' });
+  const d = await dealById(qt.deal_id);
+  const { contact } = await quoteContext(d);
+  const to = str(req.body.to) || contact?.email;
+  if (!to) return res.status(400).json({ error: 'Recipient email is required' });
+  const user = (await q('SELECT * FROM users WHERE id=$1', [req.session.user.id])).rows[0];
+  const fromAddr = (process.env.MAIL_FROM || '').match(/<([^>]+)>/)?.[1] || process.env.MAIL_FROM || process.env.SMTP_USER || '';
+  const body = str(req.body.body) || `Hi ${contact?.first_name || 'there'},\n\nAttached is our proposal for ${d.name}. The investment summary is on page 1; terms follow.\n\nHappy to walk through it whenever suits you.`;
+  await mailer.sendRaw({
+    from: `${user.name} via 27 Squared <${fromAddr}>`, to, replyTo: [user.email, fromAddr],
+    subject: str(req.body.subject) || `Proposal ${qt.number}: ${qt.title}`,
+    text: body + `\n\n${user.name}\n27 Squared Marketing`,
+    html: `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#000">${body.split(/\n\n/).map(pp => `<p>${esc(pp).replace(/\n/g, '<br>')}</p>`).join('')}<p style="margin-top:18px">${esc(user.name)}<br><span style="color:#636466">27 Squared Marketing</span></p></div>`,
+    attachments: [{ filename: `27SQ ${qt.number}.pdf`, content: qt.pdf, contentType: 'application/pdf' }],
+  });
+  const { rows } = await q(`UPDATE quotes SET status='sent', sent_to=$2, sent_at=now() WHERE id=$1 RETURNING id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at, TRUE AS has_pdf`, [qt.id, to]);
+  await q("INSERT INTO emails (direction, contact_id, deal_id, user_id, from_email, to_email, subject, body) VALUES ('out',$1,$2,$3,$4,$5,$6,$7)", [contact?.id || null, d.id, user.id, fromAddr, to, str(req.body.subject) || `Proposal ${qt.number}: ${qt.title}`, body]);
+  await logActivity({ dealId: d.id, contactId: d.contact_id, userId: user.id, type: 'Proposal', text: `Sent quote ${qt.number} to ${to}` });
+  res.json(quoteOut(rows[0]));
+}));
+app.patch('/api/quotes/:id/status', requireAuth, wrap(async (req, res) => {
+  const status = ['draft', 'sent', 'accepted', 'declined'].includes(req.body.status) ? req.body.status : null;
+  if (!status) return res.status(400).json({ error: 'Unknown status' });
+  const { rows } = await q('UPDATE quotes SET status=$2 WHERE id=$1 RETURNING id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at, (pdf IS NOT NULL) AS has_pdf', [req.params.id, status]);
+  if (!rows[0]) return res.status(404).json({ error: 'Quote not found' });
+  await logActivity({ dealId: rows[0].deal_id, userId: req.session.user.id, type: 'Proposal', text: `Quote ${rows[0].number} marked ${status}` });
+  res.json(quoteOut(rows[0]));
+}));
+
 /* ---------- DocuSign ---------- */
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
   res.json(await docusign.status());
@@ -563,7 +785,7 @@ app.get('/api/docusign/templates/:id/roles', requireAuth, wrap(async (req, res) 
 app.post('/api/deals/:id/envelopes', requireAuth, wrap(async (req, res) => {
   const d = await dealById(req.params.id);
   if (!d) return res.status(404).json({ error: 'Deal not found' });
-  if (!SIGN_STAGES.includes(d.stage)) return res.status(400).json({ error: `Signatures can be sent at ${SIGN_STAGES.join(' or ')}` });
+  if (!canSign(pipelineById(d.pipeline_id), d.stage)) return res.status(400).json({ error: 'Signatures can be sent once the deal reaches a signature stage (Proposal sent or Closed won)' });
   const templateId = str(req.body.templateId), roleName = str(req.body.roleName), signerName = str(req.body.signerName), signerEmail = str(req.body.signerEmail).toLowerCase();
   if (!templateId || !roleName || !signerName || !signerEmail) return res.status(400).json({ error: 'Template, role, signer name and signer email are required' });
   const extraRoles = Array.isArray(req.body.extraRoles) ? req.body.extraRoles.filter(r => str(r.roleName) && str(r.name) && str(r.email)) : [];
@@ -658,9 +880,9 @@ app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- backup ---------- */
 app.get('/api/export', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties')]);
+  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties, pipelines, products, dealItems, quotes] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties'), q('SELECT * FROM pipelines'), q('SELECT * FROM products'), q('SELECT * FROM deal_items'), q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at FROM quotes')]);
   res.setHeader('Content-Disposition', `attachment; filename="27sq-crm-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows });
+  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows, pipelines: pipelines.rows, products: products.rows, dealItems: dealItems.rows, quotes: quotes.rows });
 }));
 
 /* ---------- daily task digest (8:00 America/New_York) ---------- */
@@ -707,6 +929,8 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
   await waitForDb();
   await q(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
   await loadProps();
+  await loadPipelines();
+  const seeded = await catalog.seedIfEmpty(q); if (seeded) console.log(`Seeded ${seeded} rate-card products`);
   engage.init({ query: q, appUrl: APP_URL });
   app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}`));
   setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);

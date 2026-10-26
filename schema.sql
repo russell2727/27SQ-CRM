@@ -198,3 +198,71 @@ CREATE TABLE IF NOT EXISTS enrollments (
 );
 CREATE INDEX IF NOT EXISTS enrollments_due_idx ON enrollments(status, next_send_at);
 CREATE INDEX IF NOT EXISTS enrollments_contact_idx ON enrollments(contact_id);
+
+-- ===== Round 2: pipelines, products / line items, quotes =====
+CREATE TABLE IF NOT EXISTS pipelines (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  stages      JSONB NOT NULL DEFAULT '[]',   -- [{name, probability, won, sign}]
+  is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO pipelines (name, stages, is_default, sort)
+SELECT 'Sales', '[{"name":"New lead","probability":10},{"name":"Contacted","probability":25},{"name":"Qualified","probability":50},{"name":"Proposal sent","probability":75,"sign":true},{"name":"Closed won","probability":100,"won":true,"sign":true}]', TRUE, 0
+WHERE NOT EXISTS (SELECT 1 FROM pipelines);
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS pipeline_id INTEGER REFERENCES pipelines(id) ON DELETE SET NULL;
+UPDATE deals SET pipeline_id = (SELECT id FROM pipelines WHERE is_default LIMIT 1) WHERE pipeline_id IS NULL;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS value_auto BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS products (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  category    TEXT DEFAULT '',
+  description TEXT DEFAULT '',
+  unit        TEXT NOT NULL DEFAULT 'each',     -- record | message | email | piece | month | each | percent | 1,000
+  billing     TEXT NOT NULL DEFAULT 'one-time', -- one-time | monthly
+  price       NUMERIC(14,4) NOT NULL DEFAULT 0, -- base/flat price (used when no tiers)
+  tiers       JSONB NOT NULL DEFAULT '[]',      -- [{min, price}] sorted ascending by min
+  active      BOOLEAN NOT NULL DEFAULT TRUE,
+  sort        INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS deal_items (
+  id          SERIAL PRIMARY KEY,
+  deal_id     INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  product_id  INTEGER REFERENCES products(id) ON DELETE SET NULL,
+  name        TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  unit        TEXT NOT NULL DEFAULT 'each',
+  billing     TEXT NOT NULL DEFAULT 'one-time',
+  qty         NUMERIC(14,2) NOT NULL DEFAULT 1,
+  unit_price  NUMERIC(14,4) NOT NULL DEFAULT 0,
+  months      INTEGER NOT NULL DEFAULT 1,       -- term for monthly lines
+  amount      NUMERIC(14,2) NOT NULL DEFAULT 0, -- qty * unit_price * (months if monthly)
+  sort        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS deal_items_deal_idx ON deal_items(deal_id, sort);
+
+CREATE TABLE IF NOT EXISTS quotes (
+  id          SERIAL PRIMARY KEY,
+  deal_id     INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  number      TEXT UNIQUE NOT NULL,
+  title       TEXT NOT NULL,
+  intro       TEXT DEFAULT '',
+  terms       TEXT DEFAULT '',
+  items       JSONB NOT NULL DEFAULT '[]',
+  one_time    NUMERIC(14,2) NOT NULL DEFAULT 0,
+  monthly     NUMERIC(14,2) NOT NULL DEFAULT 0,
+  total       NUMERIC(14,2) NOT NULL DEFAULT 0,
+  valid_until DATE,
+  pdf         BYTEA,
+  status      TEXT NOT NULL DEFAULT 'draft',   -- draft | sent | accepted
+  sent_to     TEXT,
+  sent_at     TIMESTAMPTZ,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS quotes_deal_idx ON quotes(deal_id, created_at DESC);
