@@ -73,7 +73,7 @@ const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role,
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const contactOut = r => ({
-  id: r.id, first: r.first_name, last: r.last_name, title: r.title, email: r.email, phone: r.phone,
+  id: r.id, first: r.first_name, last: r.last_name, title: r.title, email: r.email, phone: r.phone, linkedin: r.linkedin || '',
   companyId: r.company_id, vertical: r.vertical, source: r.source, notes: r.notes,
   ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
   custom: r.custom || {}, lastEmailedAt: r.last_emailed_at, lastRepliedAt: r.last_replied_at,
@@ -249,8 +249,9 @@ app.delete('/api/companies/:id', requireAuth, wrap(async (req, res) => {
 }));
 
 /* ---------- contacts ---------- */
+const cleanLinkedin = v => { v = str(v); if (!v) return ''; if (!/^https?:\/\//i.test(v)) v = 'https://' + v.replace(/^\/+/, ''); return /linkedin\.com\//i.test(v) ? v.slice(0, 300) : v.slice(0, 300); };
 const contactFields = b => ({
-  first: str(b.first), last: str(b.last), title: str(b.title), email: str(b.email).toLowerCase(), phone: str(b.phone),
+  first: str(b.first), last: str(b.last), title: str(b.title), email: str(b.email).toLowerCase(), phone: str(b.phone), linkedin: cleanLinkedin(b.linkedin),
   companyId: intOrNull(b.companyId), vertical: str(b.vertical), source: str(b.source), notes: str(b.notes), ownerId: intOrNull(b.ownerId),
 });
 
@@ -258,9 +259,9 @@ app.post('/api/contacts', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
   const { rows } = await q(
-    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated,custom)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12) RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId || req.session.user.id, req.session.user.id, JSON.stringify(cleanCustom('contact', req.body.custom))]);
+    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated,custom,linkedin)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13) RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId || req.session.user.id, req.session.user.id, JSON.stringify(cleanCustom('contact', req.body.custom)), f.linkedin]);
   const contact = rows[0];
   let deal = null;
   if (req.body.createDeal) {
@@ -278,8 +279,8 @@ app.put('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
   const { rows } = await q(
-    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,notes=$9,owner_id=$10,custom=$12,updated_at=now() WHERE id=$11 RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId, req.params.id, JSON.stringify(cleanCustom('contact', req.body.custom))]);
+    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,notes=$9,owner_id=$10,custom=$12,linkedin=$13,updated_at=now() WHERE id=$11 RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId, req.params.id, JSON.stringify(cleanCustom('contact', req.body.custom)), f.linkedin]);
   if (!rows[0]) return res.status(404).json({ error: 'Contact not found' });
   res.json(contactOut(rows[0]));
 }));
@@ -474,6 +475,7 @@ app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
       `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
       [first, last, str(r.title), email, str(r.phone), companyId, str(r.vertical), str(r.source) || 'Import', str(r.notes), ownerId, req.session.user.id]);
+    if (str(r.linkedin)) await q('UPDATE contacts SET linkedin=$2 WHERE id=$1', [ins.rows[0].id, cleanLinkedin(r.linkedin)]);
     const cust = cleanCustom('contact', r.custom); if (Object.keys(cust).length) await q('UPDATE contacts SET custom=$2 WHERE id=$1', [ins.rows[0].id, JSON.stringify(cust)]);
     if (email) existingEmails.add(email);
     created++;
@@ -802,7 +804,7 @@ app.patch('/api/quotes/:id/status', requireAuth, wrap(async (req, res) => {
 
 /* ---------- forms ---------- */
 const FIELD_TYPES = ['text', 'email', 'tel', 'textarea', 'select', 'checkbox', 'number', 'date'];
-const STD_FIELDS = { first: 'First name', last: 'Last name', email: 'Email', phone: 'Phone', company: 'Company', title: 'Title', message: 'Message' };
+const STD_FIELDS = { first: 'First name', last: 'Last name', email: 'Email', phone: 'Phone', company: 'Company', title: 'Title', linkedin: 'LinkedIn profile', message: 'Message' };
 const cleanFields = fields => (Array.isArray(fields) ? fields : []).map(f => ({
   key: str(f.key).toLowerCase().replace(/[^a-z0-9_.]+/g, '_').slice(0, 40), label: str(f.label).slice(0, 80) || STD_FIELDS[f.key] || str(f.key),
   type: FIELD_TYPES.includes(f.type) ? f.type : (f.key === 'email' ? 'email' : f.key === 'phone' ? 'tel' : f.key === 'message' ? 'textarea' : 'text'),
@@ -936,10 +938,11 @@ async function upsertContactFromWeb({ data, source, vertical, ownerId, vid, cust
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12) RETURNING *`,
       [str(data.first).slice(0, 80), str(data.last).slice(0, 80), str(data.title).slice(0, 120), email, str(data.phone).slice(0, 40), companyId, vertical || '', source, str(data.message).slice(0, 2000), ownerId, vid || null, JSON.stringify(cleanCustom('contact', custom))]);
     contact = ins.rows[0]; created = true;
+    if (str(data.linkedin)) await q('UPDATE contacts SET linkedin=$2 WHERE id=$1', [contact.id, cleanLinkedin(data.linkedin)]);
   } else {
     // fill blanks only
-    await q(`UPDATE contacts SET first_name=COALESCE(NULLIF(first_name,''),$2), last_name=COALESCE(NULLIF(last_name,''),$3), phone=COALESCE(NULLIF(phone,''),$4), title=COALESCE(NULLIF(title,''),$5), company_id=COALESCE(company_id,$6), custom=custom || $7, updated_at=now() WHERE id=$1`,
-      [contact.id, str(data.first).slice(0, 80), str(data.last).slice(0, 80), str(data.phone).slice(0, 40), str(data.title).slice(0, 120), companyId, JSON.stringify(cleanCustom('contact', custom))]);
+    await q(`UPDATE contacts SET first_name=COALESCE(NULLIF(first_name,''),$2), last_name=COALESCE(NULLIF(last_name,''),$3), phone=COALESCE(NULLIF(phone,''),$4), title=COALESCE(NULLIF(title,''),$5), company_id=COALESCE(company_id,$6), custom=custom || $7, linkedin=COALESCE(NULLIF(linkedin,''),$8), updated_at=now() WHERE id=$1`,
+      [contact.id, str(data.first).slice(0, 80), str(data.last).slice(0, 80), str(data.phone).slice(0, 40), str(data.title).slice(0, 120), companyId, JSON.stringify(cleanCustom('contact', custom)), cleanLinkedin(data.linkedin)]);
     contact = (await q('SELECT * FROM contacts WHERE id=$1', [contact.id])).rows[0];
   }
   await attachVisitor(contact.id, vid);

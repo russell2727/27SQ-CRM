@@ -664,7 +664,7 @@ function renderForms(){
 }
 function openFormEditor(id){
   const f = id ? byId(db.forms,id) : { name:'', title:'Let\'s talk', intro:'', button:'Submit', thanks:"Thanks — we'll be in touch shortly.", redirectUrl:'', fields:[{key:'first',label:'First name',type:'text',required:true},{key:'last',label:'Last name',type:'text',required:true},{key:'email',label:'Work email',type:'email',required:true},{key:'phone',label:'Phone',type:'tel'},{key:'company',label:'Company',type:'text',required:true},{key:'message',label:'How can we help?',type:'textarea'}], createDeal:true, pipelineId:defaultPipe().id, stage:'', ownerId:me.id, source:'Website', vertical:'', notify:true, active:true };
-  const std = [['first','First name'],['last','Last name'],['email','Email'],['phone','Phone'],['company','Company'],['title','Title'],['message','Message']];
+  const std = [['first','First name'],['last','Last name'],['email','Email'],['phone','Phone'],['company','Company'],['title','Title'],['linkedin','LinkedIn profile'],['message','Message']];
   const available = [...std, ...propsFor('contact').map(p=>['custom.'+p.key, p.label+' (custom)'])];
   const fieldRow = (x,i) => `<div class="step" data-frow style="padding:8px 10px"><div class="row" style="gap:6px"><select class="fr-key" style="width:170px">${available.map(([k,l])=>`<option value="${k}" ${x.key===k?'selected':''}>${esc(l)}</option>`).join('')}</select><input class="fr-label" value="${esc(x.label)}" placeholder="Label" style="flex:1;min-width:120px"><select class="fr-type" style="width:100px">${['text','email','tel','textarea','select','checkbox','number','date'].map(t=>`<option ${x.type===t?'selected':''}>${t}</option>`).join('')}</select><label class="inline" style="font-size:12px"><input type="checkbox" class="fr-req" ${x.required?'checked':''}> Required</label><button class="x fr-del" type="button" style="all:unset;cursor:pointer;color:var(--ink3)">✕</button></div><input class="fr-opts ${x.type==='select'?'':'hide'}" value="${esc((x.options||[]).join(', '))}" placeholder="Options, comma separated" style="margin-top:6px;font-size:13px"></div>`;
   openDrawer(`${dhead(id?'Edit form':'New form', id?`${f.submissions} submissions`:'')}
@@ -1082,6 +1082,7 @@ function openForm(kind, id, preset={}){
       <div class="field"><label>Company</label><select id="f-company">${companyOpts(c.companyId)}</select></div>
       <div class="field"><label>Email</label><input id="f-email" type="email" value="${esc(c.email)}"></div>
       <div class="field"><label>Phone</label><input id="f-phone" value="${esc(c.phone)}"></div>
+      <div class="field"><label>LinkedIn profile</label><input id="f-linkedin" value="${esc(c.linkedin||'')}" placeholder="linkedin.com/in/…"></div>
       <div class="field"><label>Vertical</label><select id="f-vertical"><option value="">—</option>${opts(VERTICALS,c.vertical)}</select></div>
       <div class="field"><label>Source</label><select id="f-source"><option value="">—</option>${opts(SOURCES,c.source)}</select></div>
       <div class="field"><label>Owner</label><select id="f-owner">${ownerOpts(c.ownerId)}</select></div>
@@ -1097,7 +1098,7 @@ function openForm(kind, id, preset={}){
     <div class="row"><button class="btn primary" id="f-save">${id?'Save changes':'Add contact'}</button>${id?`<button class="btn ghost danger" id="f-del">Delete</button>`:''}</div>`);
     const dealCb = drawer.querySelector('#f-deal'); if(dealCb) dealCb.onchange = ()=>drawer.querySelector('#f-dealbox').classList.toggle('hide', !dealCb.checked);
     drawer.querySelector('#f-save').onclick = async ()=>{
-      const body = { first:dv('#f-first'), last:dv('#f-last'), title:dv('#f-title'), companyId:dv('#f-company'), email:dv('#f-email'), phone:dv('#f-phone'), vertical:dv('#f-vertical'), source:dv('#f-source'), notes:dv('#f-notes'), ownerId:dv('#f-owner'), custom:readCustom() };
+      const body = { first:dv('#f-first'), last:dv('#f-last'), title:dv('#f-title'), companyId:dv('#f-company'), email:dv('#f-email'), phone:dv('#f-phone'), linkedin:dv('#f-linkedin'), vertical:dv('#f-vertical'), source:dv('#f-source'), notes:dv('#f-notes'), ownerId:dv('#f-owner'), custom:readCustom() };
       if(!body.first && !body.last){ toast('Add at least a first or last name', true); return; }
       if(!id){ body.createDeal = dealCb.checked; body.dealName=dv('#f-dealname'); body.stage=dv('#f-stage'); body.value=dv('#f-value'); }
       const r = await tryApi(()=>api(id?`/api/contacts/${id}`:'/api/contacts',{method:id?'PUT':'POST',body}));
@@ -1294,10 +1295,11 @@ async function openDetail(kind, id){
     const co = byId(db.companies,c.companyId), ds = dealsOf.contact(c.id);
     const reopen = ()=>openDetail('contact',id);
     openDrawer(`${dhead(esc(fullName(c)), `${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:''}`)}
-    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}${(byId(db.users,me.id)||{}).bookingUrl?`<a class="btn sm" href="${esc((byId(db.users,me.id)||{}).bookingUrl)}" target="_blank" rel="noopener">Book a meeting</a>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
+    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}${(byId(db.users,me.id)||{}).bookingUrl?`<a class="btn sm" href="${esc((byId(db.users,me.id)||{}).bookingUrl)}" target="_blank" rel="noopener">Book a meeting</a>`:''}${c.linkedin?`<a class="btn sm" href="${esc(c.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Email</span><span>${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</span>
       <span class="k">Phone</span><span>${c.phone?`<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:'—'}</span>
+      <span class="k">LinkedIn</span><span>${c.linkedin?`<a href="${esc(c.linkedin)}" target="_blank" rel="noopener">${esc(c.linkedin.replace(/^https?:\/\/(www\.)?/,''))}</a>`:'—'}</span>
       <span class="k">Owner</span><span>${esc(userName(c.ownerId)||'—')}</span>
       <span class="k">Vertical</span><span>${esc(c.vertical||'—')}</span>
       <span class="k">Source</span><span>${esc(c.source||'—')}</span>
@@ -1494,7 +1496,7 @@ function parseCSV(text){
   return rows.filter(r=>r.some(x=>x.trim()!==''));
 }
 const IMPORT_FIELDS = {
-  contacts: [['first','First name',/^(first|fname|first ?name|given)/i],['last','Last name',/^(last|lname|last ?name|surname|family)/i],['email','Email',/e-?mail/i],['phone','Phone',/phone|mobile|cell|tel/i],['title','Title',/^(title|job|position|role)/i],['company','Company',/company|organi[sz]ation|account|employer/i],['vertical','Vertical',/vertical|industry|segment/i],['source','Source',/source|lead ?source|channel/i],['value','Deal value',/value|amount|deal|revenue/i],['notes','Notes',/note|comment|description/i]],
+  contacts: [['first','First name',/^(first|fname|first ?name|given)/i],['last','Last name',/^(last|lname|last ?name|surname|family)/i],['email','Email',/e-?mail/i],['phone','Phone',/phone|mobile|cell|tel/i],['linkedin','LinkedIn URL',/linkedin/i],['title','Title',/^(title|job|position|role)/i],['company','Company',/company|organi[sz]ation|account|employer/i],['vertical','Vertical',/vertical|industry|segment/i],['source','Source',/source|lead ?source|channel/i],['value','Deal value',/value|amount|deal|revenue/i],['notes','Notes',/note|comment|description/i]],
   companies: [['name','Company name',/^(company|name|company ?name|organi[sz]ation|account)/i],['domain','Website / domain',/domain|website|url|web/i],['phone','Phone',/phone|tel/i],['vertical','Vertical',/vertical|industry|segment/i],['size','Size',/size|employees|headcount/i],['city','City',/city|town/i],['state','State',/state|province|region/i],['notes','Notes',/note|comment|description/i]],
 };
 const importFields = kind => [...IMPORT_FIELDS[kind], ...propsFor(kind==='contacts'?'contact':'company').map(p=>[`custom.${p.key}`, p.label+' (custom)', new RegExp('^'+p.label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$','i')])];

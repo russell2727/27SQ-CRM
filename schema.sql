@@ -359,6 +359,8 @@ CREATE TABLE IF NOT EXISTS meetings (
 );
 CREATE INDEX IF NOT EXISTS meetings_contact_idx ON meetings(contact_id, starts_at DESC);
 
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS linkedin TEXT DEFAULT '';
+
 -- ===== Round 4: dashboards, forecasting =====
 CREATE TABLE IF NOT EXISTS dashboards (
   id            SERIAL PRIMARY KEY,
