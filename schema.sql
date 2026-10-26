@@ -131,3 +131,70 @@ WHERE c.deal_migrated = FALSE;
 UPDATE activities a SET deal_id = d.id FROM deals d JOIN contacts c ON c.id = d.contact_id
 WHERE a.contact_id = c.id AND a.deal_id IS NULL AND c.deal_migrated = FALSE AND a.text LIKE 'Moved to %';
 UPDATE contacts SET deal_migrated = TRUE WHERE deal_migrated = FALSE;
+
+-- ===== Round 1: custom properties, email, sequences =====
+ALTER TABLE contacts  ADD COLUMN IF NOT EXISTS custom JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS custom JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE deals     ADD COLUMN IF NOT EXISTS custom JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE contacts  ADD COLUMN IF NOT EXISTS last_emailed_at TIMESTAMPTZ;
+ALTER TABLE contacts  ADD COLUMN IF NOT EXISTS last_replied_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS properties (
+  id         SERIAL PRIMARY KEY,
+  object     TEXT NOT NULL,                -- contact | company | deal
+  key        TEXT NOT NULL,
+  label      TEXT NOT NULL,
+  type       TEXT NOT NULL DEFAULT 'text', -- text | number | date | select | checkbox | textarea
+  options    JSONB NOT NULL DEFAULT '[]',
+  sort       INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (object, key)
+);
+
+CREATE TABLE IF NOT EXISTS emails (
+  id              SERIAL PRIMARY KEY,
+  direction       TEXT NOT NULL DEFAULT 'out',  -- out | in
+  contact_id      INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+  deal_id         INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+  user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  enrollment_id   INTEGER,
+  step_index      INTEGER,
+  from_email      TEXT DEFAULT '',
+  to_email        TEXT DEFAULT '',
+  subject         TEXT DEFAULT '',
+  body            TEXT DEFAULT '',
+  message_id      TEXT,
+  in_reply_to     TEXT,
+  track_token     TEXT UNIQUE,
+  open_count      INTEGER NOT NULL DEFAULT 0,
+  first_opened_at TIMESTAMPTZ,
+  sent_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS emails_contact_idx ON emails(contact_id, sent_at DESC);
+CREATE INDEX IF NOT EXISTS emails_msgid_idx   ON emails(message_id);
+
+CREATE TABLE IF NOT EXISTS sequences (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  steps       JSONB NOT NULL DEFAULT '[]',  -- [{delayDays, subject, body}]
+  active      BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS enrollments (
+  id            SERIAL PRIMARY KEY,
+  sequence_id   INTEGER NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+  contact_id    INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  deal_id       INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+  user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- sender
+  status        TEXT NOT NULL DEFAULT 'active',  -- active | completed | replied | stopped | failed
+  current_step  INTEGER NOT NULL DEFAULT 0,
+  next_send_at  TIMESTAMPTZ,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at      TIMESTAMPTZ,
+  end_reason    TEXT
+);
+CREATE INDEX IF NOT EXISTS enrollments_due_idx ON enrollments(status, next_send_at);
+CREATE INDEX IF NOT EXISTS enrollments_contact_idx ON enrollments(contact_id);

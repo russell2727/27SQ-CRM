@@ -9,6 +9,9 @@ Contacts, companies, deals on a 5-stage pipeline, tasks with reminders, analytic
 - **Tasks** — due date, assignee, linked deal/contact. Overdue/Today/Upcoming view; sidebar badge counts what's due.
 - **DocuSign** — "Send for signature" on any deal at Proposal sent or Closed won: pick one of your account's templates, signer prefilled from the deal's contact, extra roles editable. Status tracked (sent → delivered → completed/declined/voided) via DocuSign Connect webhook or the Refresh button; void from the CRM.
 - **Email notifications** — deal assigned to you, stage change on a deal you own, task assigned to you, envelope signed/declined/voided, and an 8:00 ET digest of tasks due/overdue.
+- **Email** — send one-to-one from a contact or deal: goes out via connect@ with the sender's name, Reply-To set to the sender, open tracking, merge tags (`{{first_name|there}}`, `{{company}}`, `{{deal_name}}`, `{{sender_name}}`, `{{contact.<custom key>}}`). Replies are captured over IMAP from the connect@ inbox, logged on the contact, and the owner is notified. BCC connect@ from Gmail to log mail sent outside the CRM.
+- **Sequences** — multi-step email cadences (day 0 / +2 / +5…), sent from the enrolling user's name at 9:00 ET on weekdays, optional same-thread replies. Auto-stop on reply, on Closed won, on Mark lost, or manually. Sequences page shows active/replied/completed per sequence.
+- **Custom properties** (admin, Settings) — text, textarea, number, date, dropdown, checkbox on contacts, companies and deals. Shown on forms and profiles, mappable in CSV import, contact properties usable as merge tags.
 - **Analytics** — new contacts/deals, open pipeline, win rate, average deal, awaiting signature, funnel, breakdowns by stage/vertical/source/owner/company.
 - **Team** (admin) — add users, roles, deactivate, reset passwords. **Settings** (admin) — integration status and setup instructions.
 
@@ -48,6 +51,8 @@ Open http://localhost:3000.
 
 **Email** — set `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` (or one `SMTP_URL`) and `MAIL_FROM`. Any provider: Google Workspace SMTP, SendGrid, Postmark, Resend, SES. Settings page has a "send me a test" button. Without these, notifications are logged, not sent.
 
+**Reply capture** — uses the same Gmail credentials as sending (`SMTP_USER`/`SMTP_PASS`) over IMAP; set `IMAP_HOST` for a non-Gmail provider. IMAP must be enabled on the mailbox. The CRM polls every 60s, starting from the most recent 50 messages on first run.
+
 **DocuSign** — JWT grant, no per-user login.
 1. DocuSign → Settings → Apps and Keys → Add App. Note the **Integration Key**, your **User ID** and the **API Account ID** shown on that page. Generate an RSA keypair there and download the private key.
 2. Set `DS_INTEGRATION_KEY`, `DS_USER_ID`, `DS_ACCOUNT_ID`, `DS_PRIVATE_KEY_B64` (= `base64 -w0 private.key`), `DS_ENV=production` (or `demo` for the developer sandbox).
@@ -68,6 +73,8 @@ Templates must have named signer roles (e.g. "Client"); the first signer role is
 | `APP_URL` | recommended | public URL, used in email links (Render sets `RENDER_EXTERNAL_URL` automatically) |
 | `SMTP_*` / `SMTP_URL`, `MAIL_FROM` | no | email notifications |
 | `DIGEST_HOUR`, `DIGEST_TZ` | no | daily task digest, default 8 / America/New_York |
+| `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS`, `IMAP_POLL_SECONDS` | no | reply capture; defaults to Gmail + SMTP creds |
+| `SEQ_SEND_HOUR` | no | hour (in `DIGEST_TZ`) sequence steps go out, default 9 |
 | `DS_INTEGRATION_KEY`, `DS_USER_ID`, `DS_ACCOUNT_ID`, `DS_PRIVATE_KEY_B64`, `DS_ENV`, `DS_WEBHOOK_SECRET` | no | DocuSign |
 
 ## Roles
@@ -87,6 +94,7 @@ Sidebar → **Export backup (JSON)** dumps contacts, companies and activities. R
 server.js          API + auth + notifications + static hosting
 lib/docusign.js    DocuSign JWT auth, templates, envelopes, Connect webhook verification
 lib/mail.js        SMTP transport
+lib/engage.js      tracked email, merge tags, sequence scheduler, IMAP reply capture
 schema.sql         tables + idempotent migrations (auto-applied on boot)
 public/index.html  the whole front end
 ```
@@ -107,6 +115,10 @@ GET    /api/docusign/status | templates | templates/:id/roles
 GET    /api/activities?dealId=|contactId=   POST /api/activities
 POST   /api/tasks                       PUT/DELETE /api/tasks/:id
 POST   /api/import/contacts             POST /api/import/companies
+GET    /api/emails?contactId=|dealId=   POST /api/emails   POST /api/emails/preview   GET /t/:token.gif (open pixel)
+POST   /api/sequences                   PUT/DELETE /api/sequences/:id   POST /api/sequences/:id/enroll
+POST   /api/enrollments/:id/stop
+POST   /api/properties (admin)          PUT/DELETE /api/properties/:id (admin)
 POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export

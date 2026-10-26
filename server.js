@@ -10,6 +10,7 @@ const { Pool, types } = require('pg');
 types.setTypeParser(1082, v => v); // DATE columns as 'YYYY-MM-DD' strings, not JS Dates
 const mailer = require('./lib/mail');
 const docusign = require('./lib/docusign');
+const engage = require('./lib/engage');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
@@ -62,16 +63,17 @@ const contactOut = r => ({
   id: r.id, first: r.first_name, last: r.last_name, title: r.title, email: r.email, phone: r.phone,
   companyId: r.company_id, vertical: r.vertical, source: r.source, notes: r.notes,
   ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+  custom: r.custom || {}, lastEmailedAt: r.last_emailed_at, lastRepliedAt: r.last_replied_at,
 });
 const companyOut = r => ({
   id: r.id, name: r.name, domain: r.domain, phone: r.phone, vertical: r.vertical, size: r.size,
-  city: r.city, state: r.state, notes: r.notes, createdAt: r.created_at,
+  city: r.city, state: r.state, notes: r.notes, createdAt: r.created_at, custom: r.custom || {},
 });
 const dealOut = r => ({
   id: r.id, name: r.name, contactId: r.contact_id, companyId: r.company_id, stage: r.stage, value: Number(r.value),
   vertical: r.vertical, source: r.source, expectedClose: r.expected_close || null, notes: r.notes,
   lost: r.lost, lostAt: r.lost_at, wonAt: r.won_at, stageHistory: r.stage_history || [],
-  ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+  ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at, custom: r.custom || {},
 });
 const taskOut = r => ({
   id: r.id, title: r.title, dueAt: r.due_at || null, done: r.done, doneAt: r.done_at,
@@ -89,6 +91,28 @@ async function logActivity({ contactId = null, dealId = null, userId = null, typ
 async function userById(id) { if (!id) return null; const { rows } = await q('SELECT * FROM users WHERE id=$1 AND active', [id]); return rows[0] || null; }
 async function dealById(id) { const { rows } = await q('SELECT * FROM deals WHERE id=$1', [id]); return rows[0] || null; }
 const dealLink = id => `${APP_URL}/#deal/${id}`;
+
+/* ---------- custom properties ---------- */
+let PROPS = []; // cache: rows from properties
+async function loadProps() { PROPS = (await q('SELECT * FROM properties ORDER BY object, sort, id')).rows; }
+function cleanCustom(object, input) {
+  const out = {}; const src = input && typeof input === 'object' ? input : {};
+  for (const p of PROPS.filter(x => x.object === object)) {
+    let v = src[p.key];
+    if (v == null || v === '') continue;
+    if (p.type === 'number') { const n = Number(v); if (!Number.isFinite(n)) continue; v = n; }
+    else if (p.type === 'checkbox') v = v === true || v === 'true' || v === 'on' || v === 1;
+    else if (p.type === 'date') { v = str(v); if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) continue; }
+    else if (p.type === 'select') { v = str(v); if (!(p.options || []).includes(v)) continue; }
+    else v = str(v).slice(0, 5000);
+    out[p.key] = v;
+  }
+  return out;
+}
+const propOut = r => ({ id: r.id, object: r.object, key: r.key, label: r.label, type: r.type, options: r.options || [], sort: r.sort });
+const emailOut = r => ({ id: r.id, direction: r.direction, contactId: r.contact_id, dealId: r.deal_id, userId: r.user_id, enrollmentId: r.enrollment_id, stepIndex: r.step_index, from: r.from_email, to: r.to_email, subject: r.subject, body: r.body, openCount: r.open_count, firstOpenedAt: r.first_opened_at, sentAt: r.sent_at });
+const sequenceOut = r => ({ id: r.id, name: r.name, steps: r.steps || [], active: r.active, createdBy: r.created_by, createdAt: r.created_at });
+const enrollmentOut = r => ({ id: r.id, sequenceId: r.sequence_id, contactId: r.contact_id, dealId: r.deal_id, userId: r.user_id, status: r.status, currentStep: r.current_step, nextSendAt: r.next_send_at, startedAt: r.started_at, endedAt: r.ended_at, endReason: r.end_reason });
 
 /* ---------- notifications ---------- */
 async function notifyUser(userId, subject, html, actorId) {
@@ -136,13 +160,15 @@ app.post('/api/auth/password', requireAuth, wrap(async (req, res) => {
 
 /* ---------- bootstrap ---------- */
 app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, deals, tasks, envelopes, users] = await Promise.all([
+  const [contacts, companies, deals, tasks, envelopes, users, sequences, enrollments] = await Promise.all([
     q('SELECT * FROM contacts ORDER BY created_at DESC'),
     q('SELECT * FROM companies ORDER BY name'),
     q('SELECT * FROM deals ORDER BY created_at DESC'),
     q('SELECT * FROM tasks ORDER BY done, due_at NULLS LAST, created_at'),
     q('SELECT * FROM envelopes ORDER BY sent_at DESC'),
     q('SELECT id, name, email, role, active, created_at FROM users ORDER BY name'),
+    q('SELECT * FROM sequences ORDER BY name'),
+    q('SELECT * FROM enrollments ORDER BY started_at DESC'),
   ]);
   res.json({
     user: req.session.user,
@@ -152,9 +178,13 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     tasks: tasks.rows.map(taskOut),
     envelopes: envelopes.rows.map(envelopeOut),
     users: users.rows.map(publicUser),
+    sequences: sequences.rows.map(sequenceOut),
+    enrollments: enrollments.rows.map(enrollmentOut),
+    properties: PROPS.map(propOut),
+    mergeTags: engage.MERGE_TAGS,
     stages: STAGES,
     signStages: SIGN_STAGES,
-    integrations: { docusign: docusign.configured(), email: mailer.configured() },
+    integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured() },
   });
 }));
 
@@ -164,13 +194,13 @@ const companyFields = b => [str(b.name), str(b.domain).replace(/^https?:\/\//, '
 app.post('/api/companies', requireAuth, wrap(async (req, res) => {
   const f = companyFields(req.body);
   if (!f[0]) return res.status(400).json({ error: 'Company name is required' });
-  const { rows } = await q('INSERT INTO companies (name,domain,phone,vertical,size,city,state,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [...f, req.session.user.id]);
+  const { rows } = await q('INSERT INTO companies (name,domain,phone,vertical,size,city,state,notes,created_by,custom) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *', [...f, req.session.user.id, JSON.stringify(cleanCustom('company', req.body.custom))]);
   res.json(companyOut(rows[0]));
 }));
 app.put('/api/companies/:id', requireAuth, wrap(async (req, res) => {
   const f = companyFields(req.body);
   if (!f[0]) return res.status(400).json({ error: 'Company name is required' });
-  const { rows } = await q('UPDATE companies SET name=$1,domain=$2,phone=$3,vertical=$4,size=$5,city=$6,state=$7,notes=$8,updated_at=now() WHERE id=$9 RETURNING *', [...f, req.params.id]);
+  const { rows } = await q('UPDATE companies SET name=$1,domain=$2,phone=$3,vertical=$4,size=$5,city=$6,state=$7,notes=$8,custom=$10,updated_at=now() WHERE id=$9 RETURNING *', [...f, req.params.id, JSON.stringify(cleanCustom('company', req.body.custom))]);
   if (!rows[0]) return res.status(404).json({ error: 'Company not found' });
   res.json(companyOut(rows[0]));
 }));
@@ -189,9 +219,9 @@ app.post('/api/contacts', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
   const { rows } = await q(
-    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId || req.session.user.id, req.session.user.id]);
+    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated,custom)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12) RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId || req.session.user.id, req.session.user.id, JSON.stringify(cleanCustom('contact', req.body.custom))]);
   const contact = rows[0];
   let deal = null;
   if (req.body.createDeal) {
@@ -208,8 +238,8 @@ app.put('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
   const { rows } = await q(
-    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,notes=$9,owner_id=$10,updated_at=now() WHERE id=$11 RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId, req.params.id]);
+    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,notes=$9,owner_id=$10,custom=$12,updated_at=now() WHERE id=$11 RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId, req.params.id, JSON.stringify(cleanCustom('contact', req.body.custom))]);
   if (!rows[0]) return res.status(404).json({ error: 'Contact not found' });
   res.json(contactOut(rows[0]));
 }));
@@ -223,16 +253,16 @@ app.delete('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
 const dealFields = b => ({
   name: str(b.name), contactId: intOrNull(b.contactId), companyId: intOrNull(b.companyId),
   stage: STAGES.includes(b.stage) ? b.stage : 'New lead', value: num(b.value), vertical: str(b.vertical), source: str(b.source),
-  expectedClose: dateOrNull(b.expectedClose), notes: str(b.notes), ownerId: intOrNull(b.ownerId),
+  expectedClose: dateOrNull(b.expectedClose), notes: str(b.notes), ownerId: intOrNull(b.ownerId), custom: cleanCustom('deal', b.custom),
 });
 
 async function createDeal(f, actorId) {
   const history = JSON.stringify([{ stage: f.stage, at: new Date().toISOString(), by: actorId }]);
   const wonAt = f.stage === 'Closed won' ? new Date() : null;
   const { rows } = await q(
-    `INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,expected_close,notes,owner_id,created_by,stage_history,won_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt]);
+    `INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,expected_close,notes,owner_id,created_by,stage_history,won_at,custom)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt, JSON.stringify(f.custom || {})]);
   const d = rows[0];
   if (d.owner_id && String(d.owner_id) !== String(actorId)) {
     const actor = await userById(actorId);
@@ -264,9 +294,9 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
     await notifyUser(cur.owner_id, `${cur.name}: moved to ${f.stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(f.stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   }
   const { rows } = await q(
-    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,updated_at=now()
+    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,updated_at=now()
      WHERE id=$13 RETURNING *`,
-    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id]);
+    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom)]);
   if (f.ownerId && String(f.ownerId) !== String(cur.owner_id)) {
     await notifyUser(f.ownerId, `Deal assigned to you: ${f.name}`, `<p>${esc(me.name)} assigned you the deal <b>${esc(f.name)}</b> (${esc(f.stage)}).</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   }
@@ -284,6 +314,7 @@ app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
   const wonAt = stage === 'Closed won' ? new Date() : cur.won_at;
   const { rows } = await q('UPDATE deals SET stage=$1, lost=FALSE, lost_at=NULL, stage_history=$2, won_at=$3, updated_at=now() WHERE id=$4 RETURNING *', [stage, JSON.stringify(history), wonAt, cur.id]);
   await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${stage}` });
+  if (stage === 'Closed won' && cur.contact_id) await engage.stopAllForContact(cur.contact_id, 'stopped', 'deal closed won');
   await notifyUser(cur.owner_id, `${cur.name}: moved to ${stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   res.json(dealOut(rows[0]));
 }));
@@ -293,6 +324,7 @@ app.patch('/api/deals/:id/lost', requireAuth, wrap(async (req, res) => {
   const { rows } = await q('UPDATE deals SET lost=$1, lost_at=$2, updated_at=now() WHERE id=$3 RETURNING *', [lost, lost ? new Date() : null, req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Deal not found' });
   await logActivity({ dealId: rows[0].id, contactId: rows[0].contact_id, userId: req.session.user.id, text: lost ? 'Marked lost' : 'Reopened' });
+  if (lost && rows[0].contact_id) await engage.stopAllForContact(rows[0].contact_id, 'stopped', 'deal marked lost');
   res.json(dealOut(rows[0]));
 }));
 
@@ -368,7 +400,7 @@ app.post('/api/import/companies', requireAuth, wrap(async (req, res) => {
   for (const r of rows) {
     const name = str(r.name); if (!name) { skipped++; continue; }
     const c = await findOrCreateCompany(name, r, req.session.user.id, cache);
-    c.created ? created++ : skipped++;
+    if (c.created) { created++; const cust = cleanCustom('company', r.custom); if (Object.keys(cust).length) await q('UPDATE companies SET custom=$2 WHERE id=$1', [c.id, JSON.stringify(cust)]); } else skipped++;
     c.created = false;
   }
   res.json({ created, skipped });
@@ -391,6 +423,7 @@ app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
       `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
       [first, last, str(r.title), email, str(r.phone), companyId, str(r.vertical), str(r.source) || 'Import', str(r.notes), ownerId, req.session.user.id]);
+    const cust = cleanCustom('contact', r.custom); if (Object.keys(cust).length) await q('UPDATE contacts SET custom=$2 WHERE id=$1', [ins.rows[0].id, JSON.stringify(cust)]);
     if (email) existingEmails.add(email);
     created++;
     if (createDeals) {
@@ -402,6 +435,119 @@ app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
     }
   }
   res.json({ created, skipped, companies, deals });
+}));
+
+/* ---------- properties (admin) ---------- */
+const PROP_TYPES = ['text', 'textarea', 'number', 'date', 'select', 'checkbox'];
+app.post('/api/properties', requireAdmin, wrap(async (req, res) => {
+  const object = ['contact', 'company', 'deal'].includes(req.body.object) ? req.body.object : null;
+  const label = str(req.body.label); const type = PROP_TYPES.includes(req.body.type) ? req.body.type : 'text';
+  let key = str(req.body.key) || label; key = key.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  if (!object || !label || !key) return res.status(400).json({ error: 'Object, label and key are required' });
+  const options = type === 'select' ? (Array.isArray(req.body.options) ? req.body.options : String(req.body.options || '').split(/\n|,/)).map(str).filter(Boolean) : [];
+  if ((await q('SELECT 1 FROM properties WHERE object=$1 AND key=$2', [object, key])).rows[0]) return res.status(409).json({ error: `A ${object} property with key "${key}" already exists` });
+  const sort = (await q('SELECT COALESCE(MAX(sort),0)+1 AS s FROM properties WHERE object=$1', [object])).rows[0].s;
+  const { rows } = await q('INSERT INTO properties (object,key,label,type,options,sort) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [object, key, label, type, JSON.stringify(options), sort]);
+  await loadProps(); res.json(propOut(rows[0]));
+}));
+app.put('/api/properties/:id', requireAdmin, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM properties WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Property not found' });
+  const label = str(req.body.label) || cur.label;
+  const options = cur.type === 'select' ? (Array.isArray(req.body.options) ? req.body.options : String(req.body.options ?? (cur.options || []).join('\n')).split(/\n|,/)).map(str).filter(Boolean) : [];
+  const sort = req.body.sort != null ? Number(req.body.sort) : cur.sort;
+  const { rows } = await q('UPDATE properties SET label=$2, options=$3, sort=$4 WHERE id=$1 RETURNING *', [cur.id, label, JSON.stringify(options), sort]);
+  await loadProps(); res.json(propOut(rows[0]));
+}));
+app.delete('/api/properties/:id', requireAdmin, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM properties WHERE id=$1', [req.params.id])).rows[0];
+  if (cur) {
+    await q('DELETE FROM properties WHERE id=$1', [cur.id]);
+    const table = { contact: 'contacts', company: 'companies', deal: 'deals' }[cur.object];
+    await q(`UPDATE ${table} SET custom = custom - $1 WHERE custom ? $1`, [cur.key]);
+    await loadProps();
+  }
+  res.json({ ok: true });
+}));
+
+/* ---------- email ---------- */
+app.get('/api/emails', requireAuth, wrap(async (req, res) => {
+  const where = req.query.contactId ? ['contact_id=$1', req.query.contactId] : req.query.dealId ? ['deal_id=$1', req.query.dealId] : null;
+  if (!where) return res.status(400).json({ error: 'contactId or dealId required' });
+  const { rows } = await q(`SELECT * FROM emails WHERE ${where[0]} ORDER BY sent_at DESC LIMIT 100`, [where[1]]);
+  res.json(rows.map(emailOut));
+}));
+app.post('/api/emails/preview', requireAuth, wrap(async (req, res) => {
+  const contact = req.body.contactId ? (await q('SELECT * FROM contacts WHERE id=$1', [req.body.contactId])).rows[0] : null;
+  const deal = req.body.dealId ? (await q('SELECT * FROM deals WHERE id=$1', [req.body.dealId])).rows[0] : null;
+  const company = contact?.company_id ? (await q('SELECT * FROM companies WHERE id=$1', [contact.company_id])).rows[0] : null;
+  const user = (await q('SELECT * FROM users WHERE id=$1', [req.session.user.id])).rows[0];
+  const ctx = engage.mergeContext({ contact, company, deal, user });
+  res.json({ subject: engage.merge(req.body.subject, ctx), body: engage.merge(req.body.body, ctx) });
+}));
+app.post('/api/emails', requireAuth, wrap(async (req, res) => {
+  if (!mailer.configured()) return res.status(400).json({ error: 'Email is not configured (Settings)' });
+  const contact = req.body.contactId ? (await q('SELECT * FROM contacts WHERE id=$1', [req.body.contactId])).rows[0] : null;
+  const deal = req.body.dealId ? (await q('SELECT * FROM deals WHERE id=$1', [req.body.dealId])).rows[0] : null;
+  const to = str(req.body.to) || contact?.email;
+  const subject = str(req.body.subject), body = str(req.body.body);
+  if (!to || !subject || !body) return res.status(400).json({ error: 'Recipient, subject and body are required' });
+  const user = (await q('SELECT * FROM users WHERE id=$1', [req.session.user.id])).rows[0];
+  const e = await engage.sendTracked({ contact, deal, user, to, subject, body });
+  res.json(emailOut(e));
+}));
+app.get('/t/:token.gif', wrap(async (req, res) => {
+  engage.recordOpen(req.params.token, req.headers['user-agent']).catch(() => {});
+  res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', Pragma: 'no-cache', Expires: '0' });
+  res.end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+}));
+
+/* ---------- sequences ---------- */
+const cleanSteps = steps => (Array.isArray(steps) ? steps : []).map((s, i) => ({
+  delayDays: Math.max(0, Math.min(90, Number(s.delayDays) || (i === 0 ? 0 : 1))),
+  subject: str(s.subject).slice(0, 300), body: str(s.body).slice(0, 20000), threadReply: !!s.threadReply,
+})).filter(s => s.subject && s.body).slice(0, 12);
+
+app.post('/api/sequences', requireAuth, wrap(async (req, res) => {
+  const name = str(req.body.name), steps = cleanSteps(req.body.steps);
+  if (!name) return res.status(400).json({ error: 'Sequence name is required' });
+  const { rows } = await q('INSERT INTO sequences (name, steps, active, created_by) VALUES ($1,$2,$3,$4) RETURNING *', [name, JSON.stringify(steps), req.body.active !== false, req.session.user.id]);
+  res.json(sequenceOut(rows[0]));
+}));
+app.put('/api/sequences/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM sequences WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Sequence not found' });
+  const name = req.body.name != null ? str(req.body.name) || cur.name : cur.name;
+  const steps = req.body.steps != null ? cleanSteps(req.body.steps) : cur.steps;
+  const active = req.body.active != null ? !!req.body.active : cur.active;
+  const { rows } = await q('UPDATE sequences SET name=$2, steps=$3, active=$4, updated_at=now() WHERE id=$1 RETURNING *', [cur.id, name, JSON.stringify(steps), active]);
+  res.json(sequenceOut(rows[0]));
+}));
+app.delete('/api/sequences/:id', requireAuth, wrap(async (req, res) => {
+  await q('DELETE FROM sequences WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+app.post('/api/sequences/:id/enroll', requireAuth, wrap(async (req, res) => {
+  if (!mailer.configured()) return res.status(400).json({ error: 'Email is not configured (Settings)' });
+  const seq = (await q('SELECT * FROM sequences WHERE id=$1', [req.params.id])).rows[0];
+  if (!seq) return res.status(404).json({ error: 'Sequence not found' });
+  if (!seq.active) return res.status(400).json({ error: 'Sequence is paused' });
+  const ids = (Array.isArray(req.body.contactIds) ? req.body.contactIds : [req.body.contactId]).map(Number).filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: 'Pick at least one contact' });
+  const senderId = intOrNull(req.body.userId) || req.session.user.id;
+  let enrolled = 0; const skipped = [];
+  for (const cid of ids) {
+    const r = await engage.enroll({ sequence: seq, contactId: cid, dealId: intOrNull(req.body.dealId), userId: senderId, sendFirstNow: req.body.sendFirstNow !== false });
+    if (r.enrollment) enrolled++; else skipped.push(r.skipped);
+  }
+  // Send any step-0 emails right away rather than waiting for the minute tick
+  engage.runDueEnrollments().catch(e => console.error('Immediate sequence send failed:', e.message));
+  res.json({ enrolled, skipped });
+}));
+app.post('/api/enrollments/:id/stop', requireAuth, wrap(async (req, res) => {
+  const e = await engage.stopEnrollment(req.params.id, 'stopped', `by ${req.session.user.name}`);
+  if (!e) return res.status(404).json({ error: 'Enrollment not active' });
+  res.json(enrollmentOut(e));
 }));
 
 /* ---------- DocuSign ---------- */
@@ -503,7 +649,7 @@ app.put('/api/users/:id', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- settings (admin) ---------- */
 app.get('/api/settings', requireAdmin, wrap(async (req, res) => {
-  res.json({ appUrl: APP_URL, email: mailer.describe(), docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook` });
+  res.json({ appUrl: APP_URL, email: mailer.describe(), inbound: { configured: engage.imapConfigured(), host: process.env.IMAP_HOST || 'imap.gmail.com', mailbox: process.env.IMAP_USER || process.env.SMTP_USER || null, lastUid: (await q("SELECT value FROM meta WHERE key='imap_last_uid'")).rows[0]?.value || null }, docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook` });
 }));
 app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
   await mailer.send({ to: req.session.user.email, subject: '27 Squared CRM — test email', html: '<p>Email notifications are working.</p>' });
@@ -512,9 +658,9 @@ app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- backup ---------- */
 app.get('/api/export', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, deals, activities, tasks, envelopes] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes')]);
+  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties')]);
   res.setHeader('Content-Disposition', `attachment; filename="27sq-crm-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows });
+  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows });
 }));
 
 /* ---------- daily task digest (8:00 America/New_York) ---------- */
@@ -560,6 +706,10 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
 (async () => {
   await waitForDb();
   await q(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}`));
+  await loadProps();
+  engage.init({ query: q, appUrl: APP_URL });
+  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}`));
   setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);
+  setInterval(() => engage.runDueEnrollments().catch(e => console.error('Sequence tick failed:', e.message)), 60 * 1000);
+  if (engage.imapConfigured()) { engage.pollInbox().catch(() => {}); setInterval(() => engage.pollInbox().catch(() => {}), Number(process.env.IMAP_POLL_SECONDS || 60) * 1000); }
 })().catch(e => { console.error('Boot failed:', e); process.exit(1); });
