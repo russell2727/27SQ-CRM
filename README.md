@@ -15,6 +15,10 @@ Contacts, companies, deals on a 5-stage pipeline, tasks with reminders, analytic
 - **Pipelines** (admin, Settings) — several pipelines, each with its own stages; every stage carries a win probability, a "won" flag and a "signatures allowed" flag. Board shows plain and weighted totals per column; Analytics has a weighted forecast and forecast by expected-close month. Renaming a stage moves its deals.
 - **Rate card & line items** — products seeded from the 27SQ rate card (appends, hygiene, One Connect, Hercules ESP tiers, SMS tiers, direct mail tiers, postage, social/CTV media and management, creative, agency fee). Add them to a deal as line items: quantity, unit rate (auto from volume tiers, override freely), term for monthly items. Line items drive the deal value.
 - **Quotes** — one click builds a branded proposal PDF from the deal's line items (overview, one-time/monthly investment table, tinted subtotals, magenta total, terms, acceptance block), numbered Q-YYYY-nnnn and stored on the deal. View, email with PDF attached, mark accepted.
+- **Web forms** — form builder (standard + custom fields), hosted branded page at `/f/<key>` and a one-line embed snippet (auto-sizing iframe). Submissions create or update the contact (match by email, fill blanks only), create the company, optionally a deal at a chosen stage, log the submission, notify the owner. Honeypot + rate limiting.
+- **Website tracking** — `<script src=".../track.js" async>` sets a first-party cookie and records page views; once a visitor submits a form (or is identified) their earlier visits attach to the contact and show under "Website activity". Identify webhook `POST /api/public/identify/<siteKey>` for SmartPiXL / One Connect to push identified visitors (email + optional name/company/url).
+- **Workflows** — triggers: deal created, stage changed (with pipeline/stage filters), won, lost, contact created, form submitted (per form), no activity for N days (hourly scan, once per deal per N days). Conditions: vertical, source, owner, min value. Actions: create task, email the owner, email the contact (tracked), enroll in sequence, assign owner, move stage, add note. Run log per workflow.
+- **Meetings** — each user sets a Google Calendar appointment-schedule link in My profile: "Book a meeting" button on contacts and `{{meeting_link}}` merge tag. With Google Calendar sync (service account + domain-wide delegation), meetings whose attendees match a contact are logged automatically (scheduled → held → cancelled) and the next meeting shows on the deal.
 - **Analytics** — new contacts/deals, open pipeline, win rate, average deal, awaiting signature, funnel, breakdowns by stage/vertical/source/owner/company.
 - **Team** (admin) — add users, roles, deactivate, reset passwords. **Settings** (admin) — integration status and setup instructions.
 
@@ -56,6 +60,8 @@ Open http://localhost:3000.
 
 **Reply capture** — uses the same Gmail credentials as sending (`SMTP_USER`/`SMTP_PASS`) over IMAP; set `IMAP_HOST` for a non-Gmail provider. IMAP must be enabled on the mailbox. The CRM polls every 60s, starting from the most recent 50 messages on first run.
 
+**Google Calendar sync** — Google Cloud project → enable Calendar API → service account → JSON key. In Google Admin → Security → API controls → Domain-wide delegation, authorize the service account's client ID for scope `https://www.googleapis.com/auth/calendar.readonly`. Set `GOOGLE_SA_JSON_B64` to the base64 of the key file. Syncs every 10 minutes; Settings has "Sync now".
+
 **DocuSign** — JWT grant, no per-user login.
 1. DocuSign → Settings → Apps and Keys → Add App. Note the **Integration Key**, your **User ID** and the **API Account ID** shown on that page. Generate an RSA keypair there and download the private key.
 2. Set `DS_INTEGRATION_KEY`, `DS_USER_ID`, `DS_ACCOUNT_ID`, `DS_PRIVATE_KEY_B64` (= `base64 -w0 private.key`), `DS_ENV=production` (or `demo` for the developer sandbox).
@@ -78,6 +84,7 @@ Templates must have named signer roles (e.g. "Client"); the first signer role is
 | `DIGEST_HOUR`, `DIGEST_TZ` | no | daily task digest, default 8 / America/New_York |
 | `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS`, `IMAP_POLL_SECONDS` | no | reply capture; defaults to Gmail + SMTP creds |
 | `SEQ_SEND_HOUR` | no | hour (in `DIGEST_TZ`) sequence steps go out, default 9 |
+| `GOOGLE_SA_JSON_B64`, `CALENDAR_POLL_MINUTES` | no | Google Calendar sync |
 | `DS_INTEGRATION_KEY`, `DS_USER_ID`, `DS_ACCOUNT_ID`, `DS_PRIVATE_KEY_B64`, `DS_ENV`, `DS_WEBHOOK_SECRET` | no | DocuSign |
 
 ## Roles
@@ -100,6 +107,8 @@ lib/mail.js        SMTP transport
 lib/engage.js      tracked email, merge tags, sequence scheduler, IMAP reply capture
 lib/catalog.js     rate-card seed + tiered pricing
 lib/quote-pdf.js   branded proposal PDF (pdfkit)
+lib/workflows.js   automation engine
+lib/calendar.js    Google Calendar sync (service account)
 schema.sql         tables + idempotent migrations (auto-applied on boot)
 public/index.html  the whole front end
 ```
@@ -128,6 +137,13 @@ POST   /api/pipelines (admin)           PUT/DELETE /api/pipelines/:id (admin)
 POST   /api/products (admin)            PUT/DELETE /api/products/:id (admin)
 GET/POST /api/deals/:id/items           PUT/DELETE /api/items/:id        POST /api/deals/:id/value (manual override)
 GET/POST /api/deals/:id/quotes          GET /api/quotes/:id.pdf          POST /api/quotes/:id/send   PATCH /api/quotes/:id/status
+POST   /api/forms                       PUT/DELETE /api/forms/:id        GET /api/forms/:id/submissions
+GET    /f/:key  /f/:key/embed.js  /track.js          (public)
+POST   /api/public/forms/:key/submit  /api/public/track  /api/public/identify/:siteKey   (public, CORS)
+GET    /api/contacts/:id/visits
+POST   /api/workflows                   PUT/DELETE /api/workflows/:id    GET /api/workflows/:id/runs   POST /api/workflows/scan (admin)
+GET    /api/meetings?contactId=|dealId= POST /api/meetings/sync (admin)
+PUT    /api/me                          booking link, calendar sync opt-in
 POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export

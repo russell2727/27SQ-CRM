@@ -13,6 +13,8 @@ const docusign = require('./lib/docusign');
 const engage = require('./lib/engage');
 const catalog = require('./lib/catalog');
 const quotePdf = require('./lib/quote-pdf');
+const workflows = require('./lib/workflows');
+const calendar = require('./lib/calendar');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
@@ -66,7 +68,7 @@ const str = v => (v == null ? '' : String(v)).trim();
 const num = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
 const intOrNull = v => { const n = Number(v); return v !== '' && v != null && Number.isInteger(n) ? n : null; };
 const dateOrNull = v => { const s = str(v); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null; };
-const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, active: u.active, createdAt: u.created_at });
+const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, active: u.active, createdAt: u.created_at, bookingUrl: u.booking_url || '', calendarSync: u.calendar_sync !== false });
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const contactOut = r => ({
@@ -91,6 +93,9 @@ const pipelineOut = r => ({ id: r.id, name: r.name, stages: r.stages || [], isDe
 const productOut = r => ({ id: r.id, name: r.name, category: r.category, description: r.description, unit: r.unit, billing: r.billing, price: Number(r.price), tiers: r.tiers || [], active: r.active, sort: r.sort });
 const itemOut = r => ({ id: r.id, dealId: r.deal_id, productId: r.product_id, name: r.name, description: r.description, unit: r.unit, billing: r.billing, qty: Number(r.qty), unitPrice: Number(r.unit_price), months: r.months, amount: Number(r.amount), sort: r.sort });
 const quoteOut = r => ({ id: r.id, dealId: r.deal_id, number: r.number, title: r.title, intro: r.intro, terms: r.terms, items: r.items || [], oneTime: Number(r.one_time), monthly: Number(r.monthly), total: Number(r.total), validUntil: r.valid_until, status: r.status, sentTo: r.sent_to, sentAt: r.sent_at, createdBy: r.created_by, createdAt: r.created_at, hasPdf: !!r.has_pdf });
+const formOut = r => ({ id: r.id, key: r.key, name: r.name, title: r.title, intro: r.intro, button: r.button, thanks: r.thanks, redirectUrl: r.redirect_url, fields: r.fields || [], createDeal: r.create_deal, pipelineId: r.pipeline_id, stage: r.stage, ownerId: r.owner_id, source: r.source, vertical: r.vertical, notify: r.notify, active: r.active, submissions: r.submissions, createdAt: r.created_at });
+const workflowOut = r => ({ id: r.id, name: r.name, trigger: r.trigger, conditions: r.conditions || {}, actions: r.actions || [], active: r.active, runs: r.runs, lastRunAt: r.last_run_at, createdAt: r.created_at });
+const meetingOut = r => ({ id: r.id, userId: r.user_id, contactId: r.contact_id, dealId: r.deal_id, title: r.title, startsAt: r.starts_at, endsAt: r.ends_at, link: r.link, status: r.status });
 const taskOut = r => ({
   id: r.id, title: r.title, dueAt: r.due_at || null, done: r.done, doneAt: r.done_at,
   dealId: r.deal_id, contactId: r.contact_id, assigneeId: r.assignee_id, createdBy: r.created_by, createdAt: r.created_at,
@@ -165,6 +170,13 @@ app.post('/api/auth/login', wrap(async (req, res) => {
 
 app.post('/api/auth/logout', (req, res) => { req.session.destroy(() => res.json({ ok: true })); });
 
+app.put('/api/me', requireAuth, wrap(async (req, res) => {
+  const url = str(req.body.bookingUrl); if (url && !/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Booking link must start with http(s)://' });
+  const { rows } = await q('UPDATE users SET booking_url=$2, calendar_sync=$3 WHERE id=$1 RETURNING *', [req.session.user.id, url, req.body.calendarSync !== false]);
+  req.session.user = publicUser(rows[0]);
+  res.json(req.session.user);
+}));
+
 app.post('/api/auth/password', requireAuth, wrap(async (req, res) => {
   const current = String(req.body.current || ''), next = String(req.body.next || '');
   if (next.length < 8) return res.status(400).json({ error: 'New password must be 8+ characters' });
@@ -186,6 +198,7 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     q('SELECT * FROM sequences ORDER BY name'),
     q('SELECT * FROM enrollments ORDER BY started_at DESC'),
   ]);
+  const [forms, wfs, meetings] = await Promise.all([q('SELECT * FROM forms ORDER BY name'), q('SELECT * FROM workflows ORDER BY name'), q("SELECT * FROM meetings WHERE status<>'cancelled' AND starts_at > now() - interval '1 day' ORDER BY starts_at")]);
   res.json({
     user: req.session.user,
     contacts: contacts.rows.map(contactOut),
@@ -198,11 +211,15 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     enrollments: enrollments.rows.map(enrollmentOut),
     properties: PROPS.map(propOut),
     mergeTags: engage.MERGE_TAGS,
+    forms: forms.rows.map(formOut),
+    workflows: wfs.rows.map(workflowOut),
+    meetings: meetings.rows.map(meetingOut),
+    siteKey: SITE_KEY,
     pipelines: PIPES.map(pipelineOut),
     products: (await q('SELECT * FROM products ORDER BY sort, id')).rows.map(productOut),
     stages: STAGE_NAMES(defaultPipeline()),
     signStages: (defaultPipeline()?.stages || []).filter(st => st.sign).map(st => st.name),
-    integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured() },
+    integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured(), calendar: calendar.configured() },
   });
 }));
 
@@ -249,6 +266,7 @@ app.post('/api/contacts', requireAuth, wrap(async (req, res) => {
       value: num(req.body.value), vertical: f.vertical, source: f.source, ownerId: contact.owner_id, expectedClose: null, notes: '',
     }, req.session.user.id);
   }
+  workflows.run('contact_created', { contact, deal }).catch(() => {});
   res.json({ contact: contactOut(contact), deal: deal && dealOut(deal) });
 }));
 
@@ -283,6 +301,7 @@ async function createDeal(f, actorId) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt, JSON.stringify(f.custom || {}), pipe.id]);
   const d = rows[0];
+  workflows.run('deal_created', { deal: d }).catch(() => {});
   if (d.owner_id && String(d.owner_id) !== String(actorId)) {
     const actor = await userById(actorId);
     await notifyUser(d.owner_id, `Deal assigned to you: ${d.name}`,
@@ -319,6 +338,7 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
     `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,pipeline_id=$15,updated_at=now()
      WHERE id=$13 RETURNING *`,
     [f.name, f.contactId, f.companyId, f.stage, value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom), pipe.id]);
+  if (cur.stage !== f.stage) { workflows.run('deal_stage', { deal: rows[0], fromStage: cur.stage }).catch(() => {}); if (isWon(pipe, f.stage)) workflows.run('deal_won', { deal: rows[0] }).catch(() => {}); }
   if (f.ownerId && String(f.ownerId) !== String(cur.owner_id)) {
     await notifyUser(f.ownerId, `Deal assigned to you: ${f.name}`, `<p>${esc(me.name)} assigned you the deal <b>${esc(f.name)}</b> (${esc(f.stage)}).</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   }
@@ -339,6 +359,8 @@ app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
   await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${stage}` });
   if (isWon(pipe, stage) && cur.contact_id) await engage.stopAllForContact(cur.contact_id, 'stopped', 'deal closed won');
   await notifyUser(cur.owner_id, `${cur.name}: moved to ${stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
+  workflows.run('deal_stage', { deal: rows[0], fromStage: cur.stage }).catch(() => {});
+  if (isWon(pipe, stage)) workflows.run('deal_won', { deal: rows[0] }).catch(() => {});
   res.json(dealOut(rows[0]));
 }));
 
@@ -348,6 +370,7 @@ app.patch('/api/deals/:id/lost', requireAuth, wrap(async (req, res) => {
   if (!rows[0]) return res.status(404).json({ error: 'Deal not found' });
   await logActivity({ dealId: rows[0].id, contactId: rows[0].contact_id, userId: req.session.user.id, text: lost ? 'Marked lost' : 'Reopened' });
   if (lost && rows[0].contact_id) await engage.stopAllForContact(rows[0].contact_id, 'stopped', 'deal marked lost');
+  if (lost) workflows.run('deal_lost', { deal: rows[0] }).catch(() => {});
   res.json(dealOut(rows[0]));
 }));
 
@@ -772,6 +795,242 @@ app.patch('/api/quotes/:id/status', requireAuth, wrap(async (req, res) => {
   res.json(quoteOut(rows[0]));
 }));
 
+/* ---------- forms ---------- */
+const FIELD_TYPES = ['text', 'email', 'tel', 'textarea', 'select', 'checkbox', 'number', 'date'];
+const STD_FIELDS = { first: 'First name', last: 'Last name', email: 'Email', phone: 'Phone', company: 'Company', title: 'Title', message: 'Message' };
+const cleanFields = fields => (Array.isArray(fields) ? fields : []).map(f => ({
+  key: str(f.key).toLowerCase().replace(/[^a-z0-9_.]+/g, '_').slice(0, 40), label: str(f.label).slice(0, 80) || STD_FIELDS[f.key] || str(f.key),
+  type: FIELD_TYPES.includes(f.type) ? f.type : (f.key === 'email' ? 'email' : f.key === 'phone' ? 'tel' : f.key === 'message' ? 'textarea' : 'text'),
+  required: !!f.required, options: (Array.isArray(f.options) ? f.options : String(f.options || '').split(/\n|,/)).map(str).filter(Boolean).slice(0, 30),
+})).filter(f => f.key).filter((f, i, a) => a.findIndex(x => x.key === f.key) === i).slice(0, 25);
+const formFields = b => ({
+  name: str(b.name).slice(0, 80), title: str(b.title).slice(0, 120), intro: str(b.intro).slice(0, 1000), button: str(b.button).slice(0, 40) || 'Submit',
+  thanks: str(b.thanks).slice(0, 500) || "Thanks — we'll be in touch shortly.", redirectUrl: /^https?:\/\//i.test(str(b.redirectUrl)) ? str(b.redirectUrl) : '',
+  fields: cleanFields(b.fields), createDeal: b.createDeal !== false, pipelineId: intOrNull(b.pipelineId), stage: str(b.stage), ownerId: intOrNull(b.ownerId),
+  source: str(b.source) || 'Website', vertical: str(b.vertical), notify: b.notify !== false, active: b.active !== false,
+});
+app.post('/api/forms', requireAuth, wrap(async (req, res) => {
+  const f = formFields(req.body); if (!f.name) return res.status(400).json({ error: 'Form name is required' });
+  if (!f.fields.some(x => x.key === 'email')) return res.status(400).json({ error: 'The form needs an email field' });
+  const key = crypto.randomBytes(8).toString('hex');
+  const { rows } = await q(`INSERT INTO forms (key,name,title,intro,button,thanks,redirect_url,fields,create_deal,pipeline_id,stage,owner_id,source,vertical,notify,active,created_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+    [key, f.name, f.title, f.intro, f.button, f.thanks, f.redirectUrl, JSON.stringify(f.fields), f.createDeal, f.pipelineId, f.stage, f.ownerId, f.source, f.vertical, f.notify, f.active, req.session.user.id]);
+  res.json(formOut(rows[0]));
+}));
+app.put('/api/forms/:id', requireAuth, wrap(async (req, res) => {
+  const f = formFields(req.body); if (!f.name) return res.status(400).json({ error: 'Form name is required' });
+  if (!f.fields.some(x => x.key === 'email')) return res.status(400).json({ error: 'The form needs an email field' });
+  const { rows } = await q(`UPDATE forms SET name=$2,title=$3,intro=$4,button=$5,thanks=$6,redirect_url=$7,fields=$8,create_deal=$9,pipeline_id=$10,stage=$11,owner_id=$12,source=$13,vertical=$14,notify=$15,active=$16 WHERE id=$1 RETURNING *`,
+    [req.params.id, f.name, f.title, f.intro, f.button, f.thanks, f.redirectUrl, JSON.stringify(f.fields), f.createDeal, f.pipelineId, f.stage, f.ownerId, f.source, f.vertical, f.notify, f.active]);
+  if (!rows[0]) return res.status(404).json({ error: 'Form not found' });
+  res.json(formOut(rows[0]));
+}));
+app.delete('/api/forms/:id', requireAuth, wrap(async (req, res) => { await q('DELETE FROM forms WHERE id=$1', [req.params.id]); res.json({ ok: true }); }));
+app.get('/api/forms/:id/submissions', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT * FROM form_submissions WHERE form_id=$1 ORDER BY created_at DESC LIMIT 200', [req.params.id]);
+  res.json(rows.map(r => ({ id: r.id, contactId: r.contact_id, dealId: r.deal_id, data: r.data, pageUrl: r.page_url, at: r.created_at })));
+}));
+
+/* ---------- public: form page, embed, submit, tracking, identify ---------- */
+let SITE_KEY = null;
+async function ensureSiteKey() {
+  const row = (await q("SELECT value FROM meta WHERE key='site_key'")).rows[0];
+  if (row) { SITE_KEY = row.value; return; }
+  SITE_KEY = crypto.randomBytes(8).toString('hex');
+  await q("INSERT INTO meta (key,value) VALUES ('site_key',$1) ON CONFLICT (key) DO NOTHING", [SITE_KEY]);
+}
+const rl = new Map();
+function rateLimited(ip, limit = 30) { // per 10 minutes
+  const now = Date.now(); const e = rl.get(ip) || { n: 0, t: now };
+  if (now - e.t > 600e3) { e.n = 0; e.t = now; }
+  e.n++; rl.set(ip, e); return e.n > limit;
+}
+const cors = (req, res, next) => { res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' }); if (req.method === 'OPTIONS') return res.sendStatus(204); next(); };
+const clientIp = req => (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+
+function formPage(f, vid) {
+  const field = x => {
+    const req = x.required ? 'required' : '', id = `f_${x.key.replace(/\./g, '_')}`;
+    const lab = `<label for="${id}">${esc(x.label)}${x.required ? ' <span class="req">*</span>' : ''}</label>`;
+    if (x.type === 'textarea') return `<div class="field">${lab}<textarea id="${id}" name="${esc(x.key)}" rows="4" ${req}></textarea></div>`;
+    if (x.type === 'select') return `<div class="field">${lab}<select id="${id}" name="${esc(x.key)}" ${req}><option value="">Choose…</option>${x.options.map(o => `<option>${esc(o)}</option>`).join('')}</select></div>`;
+    if (x.type === 'checkbox') return `<div class="field check"><label><input type="checkbox" id="${id}" name="${esc(x.key)}" value="yes" ${req}> ${esc(x.label)}</label></div>`;
+    return `<div class="field">${lab}<input id="${id}" type="${x.type}" name="${esc(x.key)}" ${req}></div>`;
+  };
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(f.title || f.name)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@800&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>:root{--m:#EC008C;--g:#636466;--line:#E2E2E5}*{box-sizing:border-box}body{margin:0;font-family:'Hanken Grotesk',Helvetica,Arial,sans-serif;color:#000;background:transparent;font-size:15px;line-height:1.45}
+.wrap{max-width:560px;margin:0 auto;padding:8px 4px}h1{font-family:'Archivo',Arial,sans-serif;font-weight:800;text-transform:uppercase;font-size:20px;margin:0 0 6px;letter-spacing:.01em}.intro{color:var(--g);margin:0 0 18px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}.field{margin-bottom:12px}.field.check label{display:flex;gap:8px;align-items:center;font-weight:400;cursor:pointer}
+label{display:block;font-size:12px;font-weight:500;color:var(--g);margin-bottom:4px}.req{color:var(--m)}
+input,select,textarea{width:100%;font:inherit;border:1px solid var(--line);border-radius:6px;padding:9px 10px;background:#fff}input:focus,select:focus,textarea:focus{outline:2px solid var(--m);outline-offset:1px;border-color:var(--m)}
+input[type=checkbox]{width:auto;margin:0}button{font:inherit;font-weight:600;background:var(--m);color:#fff;border:0;border-radius:6px;padding:11px 20px;cursor:pointer}button:hover{background:#C9007A}button[disabled]{opacity:.6}
+.hp{position:absolute;left:-9999px}.msg{padding:14px 0;color:var(--g)}.msg.ok{color:#000}.err{color:#B42318;font-size:13px;margin-top:8px}@media(max-width:480px){.row{grid-template-columns:1fr}}</style></head>
+<body><div class="wrap"><form id="f" novalidate>${f.title ? `<h1>${esc(f.title)}</h1>` : ''}${f.intro ? `<p class="intro">${esc(f.intro)}</p>` : ''}
+<div class="row">${f.fields.filter(x => ['first', 'last'].includes(x.key)).map(field).join('')}</div>
+${f.fields.filter(x => !['first', 'last'].includes(x.key)).map(field).join('')}
+<input class="hp" type="text" name="website_url" tabindex="-1" autocomplete="off"><input type="hidden" name="_vid" value="${esc(vid || '')}"><input type="hidden" name="_page" id="pg">
+<button type="submit">${esc(f.button)}</button><div class="err" id="e"></div></form><div class="msg ok" id="ok" style="display:none">${esc(f.thanks)}</div></div>
+<script>(function(){var f=document.getElementById('f'),e=document.getElementById('e');try{document.getElementById('pg').value=document.referrer||location.href}catch(x){}
+function h(){try{parent.postMessage({sq27:'height',h:document.body.scrollHeight+16},'*')}catch(x){}}h();window.addEventListener('load',h);new ResizeObserver(h).observe(document.body);
+f.addEventListener('submit',function(ev){ev.preventDefault();e.textContent='';var req=f.querySelectorAll('[required]');for(var i=0;i<req.length;i++){var el=req[i];if((el.type==='checkbox'&&!el.checked)||(el.type!=='checkbox'&&!el.value.trim())){e.textContent='Please fill in the required fields.';el.focus();return}}
+var d={};new FormData(f).forEach(function(v,k){d[k]=v});var b=f.querySelector('button');b.disabled=true;
+fetch('/api/public/forms/${esc(f.key)}/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(function(r){return r.json().then(function(j){return[r.ok,j]})}).then(function(a){if(!a[0]){e.textContent=a[1].error||'Something went wrong';b.disabled=false;return}
+${f.redirectUrl ? `try{parent.postMessage({sq27:'redirect',url:${JSON.stringify(f.redirectUrl)}},'*')}catch(x){}top.location.href=${JSON.stringify(f.redirectUrl)};` : `f.style.display='none';document.getElementById('ok').style.display='block';h();`}
+}).catch(function(){e.textContent='Network error — please try again';b.disabled=false})})})();</script></body></html>`;
+}
+
+app.get('/f/:key', wrap(async (req, res) => {
+  const f = (await q('SELECT * FROM forms WHERE key=$1 AND active', [req.params.key])).rows[0];
+  if (!f) return res.status(404).send('Form not found');
+  res.set({ 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
+  res.send(formPage(formOut(f), str(req.query.vid)));
+}));
+app.get('/f/:key/embed.js', (req, res) => {
+  res.set({ 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=300' });
+  res.send(`(function(){var s=document.currentScript,k=${JSON.stringify(req.params.key)},base=${JSON.stringify(APP_URL)};var m=document.cookie.match(/(?:^|; )_27sq=([^;]+)/);var vid=m?m[1]:'';
+var d=document.createElement('div');d.className='sq27-form';var i=document.createElement('iframe');i.src=base+'/f/'+k+(vid?'?vid='+encodeURIComponent(vid):'');i.style.cssText='width:100%;border:0;min-height:320px;display:block';i.setAttribute('title','Contact form');i.setAttribute('scrolling','no');d.appendChild(i);s.parentNode.insertBefore(d,s);
+window.addEventListener('message',function(ev){if(!ev.data||!ev.data.sq27)return;if(ev.source!==i.contentWindow)return;if(ev.data.sq27==='height')i.style.height=ev.data.h+'px';if(ev.data.sq27==='redirect')location.href=ev.data.url});})();`);
+});
+app.get('/track.js', (req, res) => {
+  res.set({ 'Content-Type': 'application/javascript', 'Cache-Control': 'public, max-age=3600' });
+  res.send(`(function(){var k=${JSON.stringify(SITE_KEY)},base=${JSON.stringify(APP_URL)};function uid(){return (Date.now().toString(36)+Math.random().toString(36).slice(2,12))}
+var m=document.cookie.match(/(?:^|; )_27sq=([^;]+)/),v=m?m[1]:uid();document.cookie='_27sq='+v+'; path=/; max-age=31536000; SameSite=Lax'+(location.protocol==='https:'?'; Secure':'');
+function send(){var p=JSON.stringify({k:k,vid:v,url:location.href,title:document.title,ref:document.referrer});if(navigator.sendBeacon){navigator.sendBeacon(base+'/api/public/track',new Blob([p],{type:'application/json'}))}else{fetch(base+'/api/public/track',{method:'POST',headers:{'Content-Type':'application/json'},body:p,keepalive:true}).catch(function(){})}}
+send();var last=location.href;setInterval(function(){if(location.href!==last){last=location.href;send()}},1000);window.sq27={identify:function(email){fetch(base+'/api/public/identify/'+k,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,vid:v,url:location.href})}).catch(function(){})},vid:v};})();`);
+});
+app.options('/api/public/*', cors);
+app.post('/api/public/track', cors, wrap(async (req, res) => {
+  const b = req.body || {};
+  if (b.k !== SITE_KEY || !str(b.vid) || !str(b.url)) return res.status(400).json({ error: 'bad request' });
+  if (rateLimited('t:' + clientIp(req), 600)) return res.status(429).json({ error: 'slow down' });
+  const contact = (await q('SELECT id FROM contacts WHERE visitor_id=$1 LIMIT 1', [str(b.vid)])).rows[0];
+  await q('INSERT INTO visits (visitor_id, contact_id, url, title, referrer) VALUES ($1,$2,$3,$4,$5)', [str(b.vid).slice(0, 64), contact?.id || null, str(b.url).slice(0, 1000), str(b.title).slice(0, 200), str(b.ref).slice(0, 1000)]);
+  res.json({ ok: true });
+}));
+
+async function attachVisitor(contactId, vid) {
+  if (!vid) return;
+  await q('UPDATE contacts SET visitor_id=$2 WHERE id=$1 AND (visitor_id IS NULL OR visitor_id=\'\')', [contactId, vid]);
+  const { rowCount } = await q('UPDATE visits SET contact_id=$1 WHERE visitor_id=$2 AND contact_id IS NULL', [contactId, vid]);
+  if (rowCount) await logActivity({ contactId, type: 'Note', text: `Matched ${rowCount} earlier website visit${rowCount === 1 ? '' : 's'} to this contact` });
+}
+
+async function upsertContactFromWeb({ data, source, vertical, ownerId, vid, custom }) {
+  const email = str(data.email).toLowerCase();
+  let contact = email ? (await q('SELECT * FROM contacts WHERE lower(email)=$1 LIMIT 1', [email])).rows[0] : null;
+  let companyId = contact?.company_id || null, created = false;
+  const coName = str(data.company);
+  if (coName && !companyId) {
+    const co = (await q('SELECT id FROM companies WHERE lower(name)=$1 LIMIT 1', [coName.toLowerCase()])).rows[0] || (await q('INSERT INTO companies (name, vertical) VALUES ($1,$2) RETURNING id', [coName, vertical || ''])).rows[0];
+    companyId = co.id;
+  }
+  if (!contact) {
+    const ins = await q(`INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,deal_migrated,visitor_id,custom)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12) RETURNING *`,
+      [str(data.first).slice(0, 80), str(data.last).slice(0, 80), str(data.title).slice(0, 120), email, str(data.phone).slice(0, 40), companyId, vertical || '', source, str(data.message).slice(0, 2000), ownerId, vid || null, JSON.stringify(cleanCustom('contact', custom))]);
+    contact = ins.rows[0]; created = true;
+  } else {
+    // fill blanks only
+    await q(`UPDATE contacts SET first_name=COALESCE(NULLIF(first_name,''),$2), last_name=COALESCE(NULLIF(last_name,''),$3), phone=COALESCE(NULLIF(phone,''),$4), title=COALESCE(NULLIF(title,''),$5), company_id=COALESCE(company_id,$6), custom=custom || $7, updated_at=now() WHERE id=$1`,
+      [contact.id, str(data.first).slice(0, 80), str(data.last).slice(0, 80), str(data.phone).slice(0, 40), str(data.title).slice(0, 120), companyId, JSON.stringify(cleanCustom('contact', custom))]);
+    contact = (await q('SELECT * FROM contacts WHERE id=$1', [contact.id])).rows[0];
+  }
+  await attachVisitor(contact.id, vid);
+  return { contact, created, companyId };
+}
+
+app.post('/api/public/forms/:key/submit', cors, wrap(async (req, res) => {
+  const f = (await q('SELECT * FROM forms WHERE key=$1 AND active', [req.params.key])).rows[0];
+  if (!f) return res.status(404).json({ error: 'Form not found' });
+  const ip = clientIp(req);
+  if (rateLimited('f:' + ip, 20)) return res.status(429).json({ error: 'Too many submissions, try again later' });
+  const b = req.body || {};
+  if (str(b.website_url)) return res.json({ ok: true }); // honeypot
+  const data = {}, custom = {};
+  for (const x of f.fields || []) {
+    let v = b[x.key]; if (v == null) v = '';
+    if (x.type === 'checkbox') v = v === 'yes' || v === true || v === 'on' || v === 'true';
+    else v = str(v).slice(0, 2000);
+    if (x.required && (v === '' || v === false)) return res.status(400).json({ error: `${x.label} is required` });
+    if (x.key.startsWith('custom.')) custom[x.key.slice(7)] = v; else data[x.key] = v;
+  }
+  if (!data.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(data.email)) return res.status(400).json({ error: 'A valid email is required' });
+  if (!data.first && !data.last) data.first = data.email.split('@')[0];
+  const { contact, created, companyId } = await upsertContactFromWeb({ data, source: f.source, vertical: f.vertical, ownerId: f.owner_id, vid: str(b._vid), custom });
+  let deal = null;
+  if (f.create_deal) {
+    const open = (await q('SELECT * FROM deals WHERE contact_id=$1 AND lost=FALSE AND won_at IS NULL LIMIT 1', [contact.id])).rows[0];
+    if (!open) {
+      const pipe = pipelineById(f.pipeline_id);
+      deal = await createDeal({ name: str(data.company) || `${contact.first_name} ${contact.last_name}`.trim(), contactId: contact.id, companyId, pipelineId: pipe.id, stage: resolveStage(pipe, f.stage), value: 0, vertical: f.vertical, source: f.source, ownerId: f.owner_id, expectedClose: null, notes: '', custom: {} }, f.owner_id || null);
+    } else deal = open;
+  }
+  const extra = Object.entries({ ...data, ...Object.fromEntries(Object.entries(custom).map(([k, v]) => ['custom.' + k, v])) }).filter(([k]) => !['first', 'last', 'email'].includes(k)).map(([k, v]) => `${k}: ${v}`).join(' · ');
+  await q('INSERT INTO form_submissions (form_id, contact_id, deal_id, data, page_url, ip) VALUES ($1,$2,$3,$4,$5,$6)', [f.id, contact.id, deal?.id || null, JSON.stringify({ ...data, custom }), str(b._page).slice(0, 1000), ip]);
+  await q('UPDATE forms SET submissions=submissions+1 WHERE id=$1', [f.id]);
+  await logActivity({ contactId: contact.id, dealId: deal?.id || null, type: 'Note', text: `Form submitted: ${f.name}${extra ? ' — ' + extra.slice(0, 400) : ''}` });
+  if (f.notify && (f.owner_id || contact.owner_id)) await notifyUser(f.owner_id || contact.owner_id, `${created ? 'New lead' : 'Form submission'}: ${contact.first_name} ${contact.last_name}`.trim(), `<p><b>${esc(f.name)}</b> submitted by ${esc(contact.first_name)} ${esc(contact.last_name)} &lt;${esc(contact.email)}&gt;${data.company ? ` at ${esc(data.company)}` : ''}.</p>${extra ? `<p>${esc(extra)}</p>` : ''}<p><a href="${APP_URL}/#contact/${contact.id}">Open contact</a></p>`, null);
+  workflows.run('form_submitted', { contact, deal, form: f }).catch(() => {});
+  if (created) workflows.run('contact_created', { contact, deal }).catch(() => {});
+  res.json({ ok: true });
+}));
+
+// Identify webhook: SmartPiXL / One Connect / your own site can POST identified visitors here.
+app.post('/api/public/identify/:key', cors, wrap(async (req, res) => {
+  if (req.params.key !== SITE_KEY) return res.status(404).json({ error: 'not found' });
+  if (rateLimited('i:' + clientIp(req), 300)) return res.status(429).json({ error: 'slow down' });
+  const b = req.body || {};
+  const email = str(b.email).toLowerCase();
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'email required' });
+  const { contact, created } = await upsertContactFromWeb({ data: { email, first: b.first || b.first_name, last: b.last || b.last_name, phone: b.phone, company: b.company, title: b.title }, source: str(b.source) || 'SmartPiXL', vertical: str(b.vertical), ownerId: intOrNull(b.ownerId), vid: str(b.vid), custom: b.custom });
+  if (str(b.url)) { await q('INSERT INTO visits (visitor_id, contact_id, url, title, referrer) VALUES ($1,$2,$3,$4,$5)', [str(b.vid) || `id:${contact.id}`, contact.id, str(b.url).slice(0, 1000), str(b.title).slice(0, 200), str(b.ref).slice(0, 1000)]); }
+  await logActivity({ contactId: contact.id, type: 'Note', text: `${created ? 'Identified website visitor' : 'Website visit identified'} via ${str(b.source) || 'SmartPiXL'}${str(b.url) ? ' — ' + str(b.url).slice(0, 200) : ''}` });
+  if (created) { if (contact.owner_id) await notifyUser(contact.owner_id, `Identified visitor: ${email}`, `<p>${esc(str(b.source) || 'SmartPiXL')} identified <b>${esc(email)}</b>${str(b.url) ? ` on ${esc(str(b.url))}` : ''}.</p><p><a href="${APP_URL}/#contact/${contact.id}">Open contact</a></p>`, null); workflows.run('contact_created', { contact }).catch(() => {}); }
+  res.json({ ok: true, contactId: contact.id, created });
+}));
+
+app.get('/api/contacts/:id/visits', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT url, title, referrer, created_at FROM visits WHERE contact_id=$1 ORDER BY created_at DESC LIMIT 100', [req.params.id]);
+  res.json(rows.map(r => ({ url: r.url, title: r.title, referrer: r.referrer, at: r.created_at })));
+}));
+
+/* ---------- workflows ---------- */
+const cleanActions = acts => (Array.isArray(acts) ? acts : []).filter(a => workflows.ACTIONS.includes(a.type)).map(a => ({
+  type: a.type, title: str(a.title).slice(0, 200), dueDays: a.dueDays === '' || a.dueDays == null ? null : Math.max(0, Number(a.dueDays) || 0), assignee: a.assignee === 'owner' ? 'owner' : (intOrNull(a.assignee) || 'owner'),
+  subject: str(a.subject).slice(0, 300), message: str(a.message).slice(0, 2000), body: str(a.body).slice(0, 20000), sequenceId: intOrNull(a.sequenceId), userId: intOrNull(a.userId), stage: str(a.stage), text: str(a.text).slice(0, 2000),
+})).slice(0, 10);
+const cleanConditions = c => { c = c && typeof c === 'object' ? c : {}; return { pipelineId: intOrNull(c.pipelineId), stage: str(c.stage), fromStage: str(c.fromStage), vertical: str(c.vertical), source: str(c.source), ownerId: intOrNull(c.ownerId), formId: intOrNull(c.formId), days: c.days ? Math.max(1, Number(c.days) || 1) : null, minValue: c.minValue ? num(c.minValue) : null }; };
+app.post('/api/workflows', requireAuth, wrap(async (req, res) => {
+  const name = str(req.body.name), trigger = workflows.TRIGGERS.includes(req.body.trigger) ? req.body.trigger : null, actions = cleanActions(req.body.actions);
+  if (!name || !trigger || !actions.length) return res.status(400).json({ error: 'Name, trigger and at least one action are required' });
+  const { rows } = await q('INSERT INTO workflows (name,trigger,conditions,actions,active,created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [name, trigger, JSON.stringify(cleanConditions(req.body.conditions)), JSON.stringify(actions), req.body.active !== false, req.session.user.id]);
+  res.json(workflowOut(rows[0]));
+}));
+app.put('/api/workflows/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM workflows WHERE id=$1', [req.params.id])).rows[0]; if (!cur) return res.status(404).json({ error: 'Workflow not found' });
+  const name = str(req.body.name) || cur.name, trigger = workflows.TRIGGERS.includes(req.body.trigger) ? req.body.trigger : cur.trigger;
+  const actions = req.body.actions != null ? cleanActions(req.body.actions) : cur.actions; if (!actions.length) return res.status(400).json({ error: 'At least one action is required' });
+  const { rows } = await q('UPDATE workflows SET name=$2,trigger=$3,conditions=$4,actions=$5,active=$6,updated_at=now() WHERE id=$1 RETURNING *', [cur.id, name, trigger, JSON.stringify(req.body.conditions != null ? cleanConditions(req.body.conditions) : cur.conditions), JSON.stringify(actions), req.body.active != null ? !!req.body.active : cur.active]);
+  res.json(workflowOut(rows[0]));
+}));
+app.delete('/api/workflows/:id', requireAuth, wrap(async (req, res) => { await q('DELETE FROM workflows WHERE id=$1', [req.params.id]); res.json({ ok: true }); }));
+app.post('/api/workflows/scan', requireAdmin, wrap(async (req, res) => { await workflows.scanNoActivity(); res.json({ ok: true }); }));
+app.get('/api/workflows/:id/runs', requireAuth, wrap(async (req, res) => {
+  const { rows } = await q('SELECT r.*, d.name AS deal_name, c.first_name, c.last_name FROM workflow_runs r LEFT JOIN deals d ON d.id=r.deal_id LEFT JOIN contacts c ON c.id=r.contact_id WHERE r.workflow_id=$1 ORDER BY r.ran_at DESC LIMIT 100', [req.params.id]);
+  res.json(rows.map(r => ({ id: r.id, dealId: r.deal_id, dealName: r.deal_name, contactId: r.contact_id, contactName: [r.first_name, r.last_name].filter(Boolean).join(' '), summary: r.summary, at: r.ran_at })));
+}));
+
+/* ---------- meetings ---------- */
+app.get('/api/meetings', requireAuth, wrap(async (req, res) => {
+  const where = req.query.contactId ? ['contact_id=$1', req.query.contactId] : req.query.dealId ? ['deal_id=$1', req.query.dealId] : null;
+  if (!where) return res.status(400).json({ error: 'contactId or dealId required' });
+  const { rows } = await q(`SELECT * FROM meetings WHERE ${where[0]} ORDER BY starts_at DESC LIMIT 50`, [where[1]]);
+  res.json(rows.map(meetingOut));
+}));
+app.post('/api/meetings/sync', requireAdmin, wrap(async (req, res) => { await calendar.sync(); res.json(calendar.status()); }));
+
 /* ---------- DocuSign ---------- */
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
   res.json(await docusign.status());
@@ -871,7 +1130,7 @@ app.put('/api/users/:id', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- settings (admin) ---------- */
 app.get('/api/settings', requireAdmin, wrap(async (req, res) => {
-  res.json({ appUrl: APP_URL, email: mailer.describe(), inbound: { configured: engage.imapConfigured(), host: process.env.IMAP_HOST || 'imap.gmail.com', mailbox: process.env.IMAP_USER || process.env.SMTP_USER || null, lastUid: (await q("SELECT value FROM meta WHERE key='imap_last_uid'")).rows[0]?.value || null }, docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook` });
+  res.json({ appUrl: APP_URL, email: mailer.describe(), inbound: { configured: engage.imapConfigured(), host: process.env.IMAP_HOST || 'imap.gmail.com', mailbox: process.env.IMAP_USER || process.env.SMTP_USER || null, lastUid: (await q("SELECT value FROM meta WHERE key='imap_last_uid'")).rows[0]?.value || null }, docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook`, calendar: calendar.status(), siteKey: SITE_KEY, trackSnippet: `<script src="${APP_URL}/track.js" async></script>`, identifyUrl: `${APP_URL}/api/public/identify/${SITE_KEY}` });
 }));
 app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
   await mailer.send({ to: req.session.user.email, subject: '27 Squared CRM — test email', html: '<p>Email notifications are working.</p>' });
@@ -880,9 +1139,9 @@ app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- backup ---------- */
 app.get('/api/export', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties, pipelines, products, dealItems, quotes] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties'), q('SELECT * FROM pipelines'), q('SELECT * FROM products'), q('SELECT * FROM deal_items'), q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at FROM quotes')]);
+  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties, pipelines, products, dealItems, quotes, forms, formSubs, wfs, meetings, visits] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties'), q('SELECT * FROM pipelines'), q('SELECT * FROM products'), q('SELECT * FROM deal_items'), q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at FROM quotes'), q('SELECT * FROM forms'), q('SELECT * FROM form_submissions'), q('SELECT * FROM workflows'), q('SELECT * FROM meetings'), q('SELECT * FROM visits ORDER BY created_at DESC LIMIT 20000')]);
   res.setHeader('Content-Disposition', `attachment; filename="27sq-crm-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows, pipelines: pipelines.rows, products: products.rows, dealItems: dealItems.rows, quotes: quotes.rows });
+  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows, pipelines: pipelines.rows, products: products.rows, dealItems: dealItems.rows, quotes: quotes.rows, forms: forms.rows, formSubmissions: formSubs.rows, workflows: wfs.rows, meetings: meetings.rows, visits: visits.rows });
 }));
 
 /* ---------- daily task digest (8:00 America/New_York) ---------- */
@@ -931,9 +1190,15 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
   await loadProps();
   await loadPipelines();
   const seeded = await catalog.seedIfEmpty(q); if (seeded) console.log(`Seeded ${seeded} rate-card products`);
+  await ensureSiteKey();
   engage.init({ query: q, appUrl: APP_URL });
-  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}`));
+  workflows.init({ query: q, appUrl: APP_URL, notifyUser, logActivity, pipelineById });
+  calendar.init({ query: q, logActivity });
+  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}, calendar: ${calendar.configured() ? 'on' : 'off'}`));
   setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);
   setInterval(() => engage.runDueEnrollments().catch(e => console.error('Sequence tick failed:', e.message)), 60 * 1000);
+  setInterval(() => workflows.scanNoActivity().catch(e => console.error('Workflow scan failed:', e.message)), 60 * 60 * 1000);
+  setTimeout(() => workflows.scanNoActivity().catch(() => {}), 30 * 1000);
+  if (calendar.configured()) { calendar.sync().catch(() => {}); setInterval(() => calendar.sync().catch(e => console.error('Calendar sync failed:', e.message)), Number(process.env.CALENDAR_POLL_MINUTES || 10) * 60 * 1000); }
   if (engage.imapConfigured()) { engage.pollInbox().catch(() => {}); setInterval(() => engage.pollInbox().catch(() => {}), Number(process.env.IMAP_POLL_SECONDS || 60) * 1000); }
 })().catch(e => { console.error('Boot failed:', e); process.exit(1); });

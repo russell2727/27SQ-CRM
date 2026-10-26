@@ -266,3 +266,95 @@ CREATE TABLE IF NOT EXISTS quotes (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS quotes_deal_idx ON quotes(deal_id, created_at DESC);
+
+-- ===== Round 3: forms & tracking, workflows, meetings =====
+ALTER TABLE users ADD COLUMN IF NOT EXISTS booking_url TEXT DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS calendar_sync BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS visitor_id TEXT;
+CREATE INDEX IF NOT EXISTS contacts_visitor_idx ON contacts(visitor_id);
+
+CREATE TABLE IF NOT EXISTS forms (
+  id            SERIAL PRIMARY KEY,
+  key           TEXT UNIQUE NOT NULL,
+  name          TEXT NOT NULL,
+  title         TEXT DEFAULT '',
+  intro         TEXT DEFAULT '',
+  button        TEXT DEFAULT 'Submit',
+  thanks        TEXT DEFAULT 'Thanks — we''ll be in touch shortly.',
+  redirect_url  TEXT DEFAULT '',
+  fields        JSONB NOT NULL DEFAULT '[]',   -- [{key,label,type,required,options}]
+  create_deal   BOOLEAN NOT NULL DEFAULT TRUE,
+  pipeline_id   INTEGER REFERENCES pipelines(id) ON DELETE SET NULL,
+  stage         TEXT DEFAULT '',
+  owner_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  source        TEXT DEFAULT 'Website',
+  vertical      TEXT DEFAULT '',
+  notify        BOOLEAN NOT NULL DEFAULT TRUE,
+  active        BOOLEAN NOT NULL DEFAULT TRUE,
+  submissions   INTEGER NOT NULL DEFAULT 0,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS form_submissions (
+  id          SERIAL PRIMARY KEY,
+  form_id     INTEGER REFERENCES forms(id) ON DELETE CASCADE,
+  contact_id  INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+  deal_id     INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+  data        JSONB NOT NULL DEFAULT '{}',
+  page_url    TEXT DEFAULT '',
+  ip          TEXT DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS visits (
+  id          BIGSERIAL PRIMARY KEY,
+  visitor_id  TEXT NOT NULL,
+  contact_id  INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+  url         TEXT NOT NULL,
+  title       TEXT DEFAULT '',
+  referrer    TEXT DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS visits_visitor_idx ON visits(visitor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS visits_contact_idx ON visits(contact_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workflows (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL,
+  trigger     TEXT NOT NULL,                 -- deal_created | deal_stage | deal_won | deal_lost | contact_created | form_submitted | no_activity
+  conditions  JSONB NOT NULL DEFAULT '{}',   -- {pipelineId, stage, vertical, source, formId, days, ownerId}
+  actions     JSONB NOT NULL DEFAULT '[]',   -- [{type, ...}]
+  active      BOOLEAN NOT NULL DEFAULT TRUE,
+  runs        INTEGER NOT NULL DEFAULT 0,
+  last_run_at TIMESTAMPTZ,
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  id           SERIAL PRIMARY KEY,
+  workflow_id  INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  deal_id      INTEGER REFERENCES deals(id) ON DELETE CASCADE,
+  contact_id   INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+  summary      TEXT DEFAULT '',
+  ran_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS workflow_runs_idx ON workflow_runs(workflow_id, deal_id, contact_id, ran_at DESC);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id          SERIAL PRIMARY KEY,
+  event_id    TEXT UNIQUE NOT NULL,
+  user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  contact_id  INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
+  deal_id     INTEGER REFERENCES deals(id) ON DELETE SET NULL,
+  title       TEXT DEFAULT '',
+  starts_at   TIMESTAMPTZ NOT NULL,
+  ends_at     TIMESTAMPTZ,
+  link        TEXT DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'scheduled',  -- scheduled | held | cancelled
+  logged_held BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS meetings_contact_idx ON meetings(contact_id, starts_at DESC);

@@ -201,6 +201,11 @@ tr.rowlink:hover td{background:var(--panel)}
 .stage-row input[type=number]{padding:4px 6px}
 .stage-row .x{all:unset;cursor:pointer;color:var(--ink3);text-align:center}
 .stage-row .x:hover{color:var(--lost)}
+.wfa{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.wfa .wh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-weight:600;font-size:13px}
+.snippet{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
+.visit{display:grid;grid-template-columns:1fr auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.visit .u{color:var(--ink2);font-size:12px;word-break:break-all}
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
 .authbox{width:min(400px,100%)}
 .authbox .brand{margin-bottom:28px}
@@ -242,8 +247,9 @@ const ACT_TYPES = ['Note','Call','Email','Meeting','Proposal'];
 
 /* ---------- state ---------- */
 let me = null;
-let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[], pipelines:[], products:[] };
-let integrations = { docusign:false, email:false, inbound:false };
+let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[], pipelines:[], products:[], forms:[], workflows:[], meetings:[] };
+let SITE_KEY='';
+let integrations = { docusign:false, email:false, inbound:false, calendar:false };
 let MERGE_TAGS = [];
 let view = 'pipeline';
 let search = '';
@@ -312,7 +318,7 @@ async function api(path, opts={}){
 }
 async function refresh(){
   const d = await api('/api/bootstrap');
-  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[], pipelines:d.pipelines||[], products:d.products||[] };
+  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[], pipelines:d.pipelines||[], products:d.products||[], forms:d.forms||[], workflows:d.workflows||[], meetings:d.meetings||[] }; SITE_KEY=d.siteKey||'';
   if(!curPipeline || !byId(db.pipelines,curPipeline)) curPipeline = (db.pipelines.find(p=>p.isDefault)||db.pipelines[0]||{}).id;
   STAGES = d.stages; SIGN_STAGES = d.signStages; integrations = d.integrations; MERGE_TAGS = d.mergeTags||[];
   render();
@@ -363,7 +369,7 @@ function routeFromHash(){
   const h = location.hash.replace(/^#/,'');
   if(!h) return;
   const [kind, id] = h.split('/');
-  if(['pipeline','contacts','companies','tasks','sequences','analytics','team','settings'].includes(kind)){ view=kind; render(); }
+  if(['pipeline','contacts','companies','tasks','sequences','forms','workflows','analytics','team','settings'].includes(kind)){ view=kind; render(); }
   else if(kind==='deal' && id){ view='pipeline'; render(); openDetail('deal', id); }
   else if(kind==='contact' && id){ view='contacts'; render(); openDetail('contact', id); }
   history.replaceState(null,'',location.pathname);
@@ -381,15 +387,18 @@ function render(){
         <button data-view="companies">Companies <span class="n" id="n-companies"></span></button>
         <button data-view="tasks">Tasks <span class="n" id="n-tasks"></span></button>
         <button data-view="sequences">Sequences <span class="n" id="n-seq"></span></button>
+        <button data-view="forms">Forms <span class="n" id="n-forms"></span></button>
+        <button data-view="workflows">Workflows <span class="n" id="n-wf"></span></button>
         <button data-view="analytics">Analytics</button>
         ${me.role==='admin'?`<button data-view="team">Team <span class="n" id="n-team"></span></button><button data-view="settings">Settings</button>`:''}
       </nav>
-      <div class="foot"><span class="who" id="who"></span><button id="pw">Change password</button><button id="export">Export backup (JSON)</button><button id="logout">Sign out</button></div>
+      <div class="foot"><span class="who" id="who"></span><button id="profile">My profile</button><button id="pw">Change password</button><button id="export">Export backup (JSON)</button><button id="logout">Sign out</button></div>
     </aside><main id="main"></main></div>`;
     document.getElementById('nav').onclick = e=>{ const b=e.target.closest('button'); if(!b) return; view=b.dataset.view; search=''; render(); };
     document.getElementById('logout').onclick = async ()=>{ await api('/api/auth/logout',{method:'POST'}); me=null; closeDrawer(); renderAuth(); };
     document.getElementById('export').onclick = ()=>{ window.location = '/api/export'; };
     document.getElementById('pw').onclick = openPassword;
+    document.getElementById('profile').onclick = openProfile;
   }
   [...document.querySelectorAll('#nav button')].forEach(x=>x.toggleAttribute('aria-current', x.dataset.view===view));
   document.getElementById('who').textContent = me.name;
@@ -400,9 +409,11 @@ function render(){
   const nt = document.getElementById('n-tasks'); nt.textContent = due || db.tasks.filter(t=>!t.done && String(t.assigneeId)===String(me.id)).length; nt.classList.toggle('due', due>0);
   const nteam = document.getElementById('n-team'); if(nteam) nteam.textContent = db.users.filter(u=>u.active).length;
   document.getElementById('n-seq').textContent = db.enrollments.filter(e=>e.status==='active').length;
+  document.getElementById('n-forms').textContent = db.forms.filter(f=>f.active).length;
+  document.getElementById('n-wf').textContent = db.workflows.filter(w=>w.active).length;
 
   const m = document.getElementById('main');
-  m.innerHTML = ({pipeline:renderPipeline, contacts:renderContacts, companies:renderCompanies, tasks:renderTasks, sequences:renderSequences, analytics:renderAnalytics, team:renderTeam, settings:renderSettings})[view]();
+  m.innerHTML = ({pipeline:renderPipeline, contacts:renderContacts, companies:renderCompanies, tasks:renderTasks, sequences:renderSequences, forms:renderForms, workflows:renderWorkflows, analytics:renderAnalytics, team:renderTeam, settings:renderSettings})[view]();
   bindMain();
 }
 
@@ -617,6 +628,145 @@ function bindEnrollStops(scope, after){
   scope.querySelectorAll('[data-stop-enr]').forEach(b=>b.onclick=async ()=>{ await tryApi(()=>api(`/api/enrollments/${b.dataset.stopEnr}/stop`,{method:'POST'})); await refresh(); toast('Stopped'); if(after) after(); });
 }
 
+/* ---------- forms ---------- */
+const TRIG_LABEL = { deal_created:'Deal created', deal_stage:'Deal stage changed', deal_won:'Deal won', deal_lost:'Deal lost', contact_created:'Contact created', form_submitted:'Form submitted', no_activity:'No activity on a deal for N days' };
+const ACT_LABEL = { create_task:'Create a task', notify_owner:'Email the owner', email_contact:'Email the contact', enroll_sequence:'Enroll in a sequence', set_owner:'Assign owner', set_stage:'Move deal to stage', add_note:'Add a note' };
+function renderForms(){
+  return `<div class="top"><h1>Forms</h1><div class="actions"><button class="btn primary" data-new="form">New form</button></div></div>
+  ${db.forms.length ? `<table><thead><tr><th>Form</th><th>Fields</th><th>Creates</th><th>Owner</th><th>Submissions</th><th>Status</th></tr></thead><tbody>
+    ${db.forms.map(f=>`<tr class="rowlink" data-open="form" data-id="${f.id}"><td><strong>${esc(f.name)}</strong><div class="muted" style="font-size:12px">/f/${esc(f.key)}</div></td><td class="muted" style="font-size:13px">${f.fields.map(x=>esc(x.label)).join(', ')}</td><td>${f.createDeal?`Contact + deal (${esc(f.stage||stageNames(byId(db.pipelines,f.pipelineId)||defaultPipe())[0])})`:'Contact only'}</td><td>${esc(userName(f.ownerId)||'—')}</td><td>${f.submissions}</td><td>${f.active?'<span class="tag won">Live</span>':'<span class="tag">Off</span>'}</td></tr>`).join('')}
+  </tbody></table>` : `<div class="bigempty"><p>No forms yet. A form is a hosted page or embed snippet for your website; submissions create contacts (and deals) here and notify the owner.</p><button class="btn primary" data-new="form">New form</button></div>`}
+  <div class="section"><h3>Website tracking</h3><p class="note">Add this once to every page of 27SquaredMarketing.com (before <code>&lt;/body&gt;</code>). Visitors get a first-party cookie; page views are stitched to the contact once they submit a form or are identified, and show on the contact profile.</p>
+  <div class="snippet">${esc(`<script src="${location.origin}/track.js" async><\/script>`)}</div>
+  <p class="note" style="margin-top:8px">Identify webhook for SmartPiXL / One Connect (POST JSON with <code>email</code>, optional <code>first</code>, <code>last</code>, <code>company</code>, <code>phone</code>, <code>url</code>, <code>source</code>): <code>${esc(location.origin)}/api/public/identify/${esc(SITE_KEY)}</code> — creates or updates the contact, logs the visit, notifies the owner.</p></div>`;
+}
+function openFormEditor(id){
+  const f = id ? byId(db.forms,id) : { name:'', title:'Let\'s talk', intro:'', button:'Submit', thanks:"Thanks — we'll be in touch shortly.", redirectUrl:'', fields:[{key:'first',label:'First name',type:'text',required:true},{key:'last',label:'Last name',type:'text',required:true},{key:'email',label:'Work email',type:'email',required:true},{key:'phone',label:'Phone',type:'tel'},{key:'company',label:'Company',type:'text',required:true},{key:'message',label:'How can we help?',type:'textarea'}], createDeal:true, pipelineId:defaultPipe().id, stage:'', ownerId:me.id, source:'Website', vertical:'', notify:true, active:true };
+  const std = [['first','First name'],['last','Last name'],['email','Email'],['phone','Phone'],['company','Company'],['title','Title'],['message','Message']];
+  const available = [...std, ...propsFor('contact').map(p=>['custom.'+p.key, p.label+' (custom)'])];
+  const fieldRow = (x,i) => `<div class="step" data-frow style="padding:8px 10px"><div class="row" style="gap:6px"><select class="fr-key" style="width:170px">${available.map(([k,l])=>`<option value="${k}" ${x.key===k?'selected':''}>${esc(l)}</option>`).join('')}</select><input class="fr-label" value="${esc(x.label)}" placeholder="Label" style="flex:1;min-width:120px"><select class="fr-type" style="width:100px">${['text','email','tel','textarea','select','checkbox','number','date'].map(t=>`<option ${x.type===t?'selected':''}>${t}</option>`).join('')}</select><label class="inline" style="font-size:12px"><input type="checkbox" class="fr-req" ${x.required?'checked':''}> Required</label><button class="x fr-del" type="button" style="all:unset;cursor:pointer;color:var(--ink3)">✕</button></div><input class="fr-opts ${x.type==='select'?'':'hide'}" value="${esc((x.options||[]).join(', '))}" placeholder="Options, comma separated" style="margin-top:6px;font-size:13px"></div>`;
+  openDrawer(`${dhead(id?'Edit form':'New form', id?`${f.submissions} submissions`:'')}
+    <div class="grid2"><div class="field"><label>Internal name</label><input id="fm-name" value="${esc(f.name)}" placeholder="Website contact form"></div><div class="field"><label>Status</label><select id="fm-active"><option value="1" ${f.active?'selected':''}>Live</option><option value="0" ${!f.active?'selected':''}>Off</option></select></div></div>
+    <div class="field"><label>Heading shown on the form</label><input id="fm-title" value="${esc(f.title)}"></div>
+    <div class="field"><label>Intro text</label><input id="fm-intro" value="${esc(f.intro)}"></div>
+    <h3 style="margin:14px 0 8px">Fields</h3><div class="steps" id="fm-fields">${f.fields.map(fieldRow).join('')}</div><div class="row"><button class="btn sm" id="fm-addf" type="button">Add field</button></div>
+    <h3 style="margin:18px 0 8px">After submit</h3>
+    <div class="grid2"><div class="field"><label>Button text</label><input id="fm-button" value="${esc(f.button)}"></div><div class="field"><label>Redirect URL (optional)</label><input id="fm-redirect" value="${esc(f.redirectUrl)}" placeholder="https://27squaredmarketing.com/thanks"></div></div>
+    <div class="field"><label>Thank-you message (if no redirect)</label><input id="fm-thanks" value="${esc(f.thanks)}"></div>
+    <h3 style="margin:18px 0 8px">What it creates</h3>
+    <div class="grid2">
+      <div class="field"><label>Owner (gets notified)</label><select id="fm-owner"><option value="">— none —</option>${ownerOpts(f.ownerId)}</select></div>
+      <div class="field"><label>Source</label><input id="fm-source" value="${esc(f.source)}"></div>
+      <div class="field"><label>Vertical</label><select id="fm-vertical"><option value="">—</option>${opts(VERTICALS,f.vertical)}</select></div>
+      <div class="field"><label class="inline" style="margin-top:22px"><input type="checkbox" id="fm-deal" ${f.createDeal?'checked':''}> Create a deal (if none open)</label></div>
+      <div class="field"><label>Pipeline</label><select id="fm-pipeline">${pipeOpts(f.pipelineId||defaultPipe().id)}</select></div>
+      <div class="field"><label>Stage</label><select id="fm-stage">${opts(stageNames(byId(db.pipelines,f.pipelineId)||defaultPipe()), f.stage||stageNames(byId(db.pipelines,f.pipelineId)||defaultPipe())[0])}</select></div>
+    </div>
+    <div class="field"><label class="inline"><input type="checkbox" id="fm-notify" ${f.notify?'checked':''}> Email the owner on each submission</label></div>
+    ${id?`<h3 style="margin:18px 0 8px">Embed</h3><p class="note">Paste where the form should appear (auto-sizes, inherits nothing from your page):</p><div class="snippet">${esc(`<script src="${location.origin}/f/${f.key}/embed.js"><\/script>`)}</div><p class="note" style="margin-top:6px">Or link to the hosted page: <a href="/f/${esc(f.key)}" target="_blank" rel="noopener">${esc(location.origin)}/f/${esc(f.key)}</a></p>
+    <div class="section"><h3>Recent submissions</h3><div id="fm-subs"><div class="empty">Loading…</div></div></div>`:''}
+    <div class="row" style="margin-top:16px"><button class="btn primary" id="fm-save">${id?'Save form':'Create form'}</button>${id?`<button class="btn ghost danger" id="fm-del">Delete</button>`:''}</div>`);
+  const box = drawer.querySelector('#fm-fields');
+  const bind = ()=>{ box.querySelectorAll('[data-frow]').forEach(r=>{ r.querySelector('.fr-del').onclick=()=>r.remove(); r.querySelector('.fr-type').onchange=e=>r.querySelector('.fr-opts').classList.toggle('hide', e.target.value!=='select'); r.querySelector('.fr-key').onchange=e=>{ const l=r.querySelector('.fr-label'); if(!l.value.trim()) l.value = (available.find(a=>a[0]===e.target.value)||[])[1]||''; }; }); };
+  bind();
+  drawer.querySelector('#fm-addf').onclick = ()=>{ box.insertAdjacentHTML('beforeend', fieldRow({key:'title',label:'',type:'text'},99)); bind(); };
+  drawer.querySelector('#fm-pipeline').onchange = e=>{ const pipe=byId(db.pipelines,e.target.value); drawer.querySelector('#fm-stage').innerHTML = opts(stageNames(pipe), stageNames(pipe)[0]); };
+  drawer.querySelector('#fm-save').onclick = async ()=>{
+    const fields = [...box.querySelectorAll('[data-frow]')].map(r=>({ key:r.querySelector('.fr-key').value, label:r.querySelector('.fr-label').value.trim(), type:r.querySelector('.fr-type').value, required:r.querySelector('.fr-req').checked, options:r.querySelector('.fr-opts').value }));
+    const body = { name:dv('#fm-name'), active:dv('#fm-active')==='1', title:dv('#fm-title'), intro:dv('#fm-intro'), fields, button:dv('#fm-button'), redirectUrl:dv('#fm-redirect'), thanks:dv('#fm-thanks'), ownerId:dv('#fm-owner'), source:dv('#fm-source'), vertical:dv('#fm-vertical'), createDeal:drawer.querySelector('#fm-deal').checked, pipelineId:dv('#fm-pipeline'), stage:dv('#fm-stage'), notify:drawer.querySelector('#fm-notify').checked };
+    if(!body.name){ toast('Name the form', true); return; }
+    const r = await tryApi(()=>api(id?`/api/forms/${id}`:'/api/forms',{method:id?'PUT':'POST',body}));
+    await refresh(); if(id){ closeDrawer(); toast('Form saved'); } else { toast('Form created — embed code is in the form'); openFormEditor(r.id); }
+  };
+  const del = drawer.querySelector('#fm-del'); if(del) del.onclick = async ()=>{ if(!confirm(`Delete "${f.name}"? Embedded copies stop working.`)) return; await tryApi(()=>api(`/api/forms/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); };
+  if(id){ api(`/api/forms/${id}/submissions`).then(subs=>{ const el=drawer.querySelector('#fm-subs'); if(!el) return; el.innerHTML = subs.length ? subs.slice(0,20).map(sb=>`<div class="act"><span class="t">${fmtDate(sb.at)}</span><span>${sb.contactId?`<a data-open-contact="${sb.contactId}" style="cursor:pointer;text-decoration:underline">${esc(contactName(sb.contactId)||sb.data.email||'')}</a>`:esc(sb.data.email||'')}${sb.data.company?` · ${esc(sb.data.company)}`:''}${sb.pageUrl?` <span class="muted" style="font-size:12px">from ${esc(sb.pageUrl.replace(/^https?:\/\//,'').slice(0,60))}</span>`:''}</span></div>`).join('') : '<div class="empty">None yet</div>'; el.querySelectorAll('[data-open-contact]').forEach(a=>a.onclick=()=>openDetail('contact',a.dataset.openContact)); }).catch(()=>{}); }
+}
+
+/* ---------- workflows ---------- */
+function renderWorkflows(){
+  return `<div class="top"><h1>Workflows</h1><div class="actions"><button class="btn primary" data-new="workflow">New workflow</button></div></div>
+  ${db.workflows.length ? `<table><thead><tr><th>Workflow</th><th>When</th><th>Then</th><th>Runs</th><th>Status</th></tr></thead><tbody>
+    ${db.workflows.map(w=>`<tr class="rowlink" data-open="workflow" data-id="${w.id}"><td><strong>${esc(w.name)}</strong></td><td>${esc(TRIG_LABEL[w.trigger]||w.trigger)}${w.conditions.stage?` → ${esc(w.conditions.stage)}`:''}${w.conditions.days?` (${w.conditions.days} days)`:''}</td><td class="muted" style="font-size:13px">${w.actions.map(a=>esc(ACT_LABEL[a.type]||a.type)).join(', ')}</td><td>${w.runs}${w.lastRunAt?` <span class="muted" style="font-size:12px">last ${fmtDate(w.lastRunAt)}</span>`:''}</td><td>${w.active?'<span class="tag won">On</span>':'<span class="tag">Off</span>'}</td></tr>`).join('')}
+  </tbody></table>` : `<div class="bigempty"><p>No workflows yet. Examples: deal hits Proposal sent → create a 3-day follow-up task · no activity for 14 days → email the owner · Closed won → assign onboarding tasks · form submitted → enroll in intro sequence.</p><button class="btn primary" data-new="workflow">New workflow</button></div>`}`;
+}
+function openWorkflowEditor(id){
+  const w = id ? byId(db.workflows,id) : { name:'', trigger:'deal_stage', conditions:{}, actions:[{type:'create_task',title:'Follow up with {{name}}',dueDays:3,assignee:'owner'}], active:true };
+  const c = w.conditions||{};
+  const actionHtml = (a,i) => `<div class="wfa" data-act><div class="wh"><select class="wa-type" style="width:auto">${Object.entries(ACT_LABEL).map(([k,l])=>`<option value="${k}" ${a.type===k?'selected':''}>${esc(l)}</option>`).join('')}</select><button class="x wa-del" type="button" style="all:unset;cursor:pointer;color:var(--ink3)">✕</button></div>
+    <div class="wa-body">${actionBody(a)}</div></div>`;
+  function actionBody(a){
+    switch(a.type){
+      case 'create_task': return `<div class="grid2"><div class="field"><label>Task title ({{name}} = deal/contact)</label><input class="wa-title" value="${esc(a.title||'Follow up with {{name}}')}"></div><div class="field"><label>Due in (days)</label><input class="wa-due" type="number" min="0" value="${esc(a.dueDays??3)}"></div><div class="field"><label>Assign to</label><select class="wa-assignee"><option value="owner" ${!a.assignee||a.assignee==='owner'?'selected':''}>Deal / contact owner</option>${ownerOpts(a.assignee)}</select></div></div>`;
+      case 'notify_owner': return `<div class="field"><label>Subject</label><input class="wa-subject" value="${esc(a.subject||'')}" placeholder="Default: workflow name + deal"></div><div class="field"><label>Message</label><textarea class="wa-message" style="min-height:60px">${esc(a.message||'')}</textarea></div>`;
+      case 'email_contact': return `<div class="field"><label>Subject</label><input class="wa-subject" value="${esc(a.subject||'')}"></div><div class="field"><label>Body (merge tags work)</label><textarea class="wa-ebody" style="min-height:100px">${esc(a.body||'')}</textarea>${mergeChips('.wa-ebody')}</div><p class="note">Sent from the owner's name via connect@, tracked like any CRM email.</p>`;
+      case 'enroll_sequence': return `<div class="field"><label>Sequence</label><select class="wa-seq">${db.sequences.filter(x=>x.active).map(x=>`<option value="${x.id}" ${String(x.id)===String(a.sequenceId)?'selected':''}>${esc(x.name)}</option>`).join('')||'<option value="">No active sequences</option>'}</select></div>`;
+      case 'set_owner': return `<div class="field"><label>New owner</label><select class="wa-user">${ownerOpts(a.userId||me.id)}</select></div>`;
+      case 'set_stage': return `<div class="field"><label>Move deal to</label><select class="wa-stage">${[...new Set(db.pipelines.flatMap(stageNames))].map(st=>`<option ${a.stage===st?'selected':''}>${esc(st)}</option>`).join('')}</select></div>`;
+      case 'add_note': return `<div class="field"><label>Note</label><input class="wa-text" value="${esc(a.text||'')}"></div>`;
+    }
+    return '';
+  }
+  const condHtml = trig => {
+    const stageOpts = [...new Set(db.pipelines.flatMap(stageNames))];
+    const common = `<div class="field"><label>Vertical (optional)</label><select id="wc-vertical"><option value="">Any</option>${opts(VERTICALS,c.vertical)}</select></div><div class="field"><label>Source (optional)</label><select id="wc-source"><option value="">Any</option>${opts(SOURCES,c.source)}</select></div><div class="field"><label>Owner (optional)</label><select id="wc-owner"><option value="">Any</option>${ownerOpts(c.ownerId)}</select></div>`;
+    if(trig==='deal_stage') return `<div class="grid2"><div class="field"><label>Pipeline (optional)</label><select id="wc-pipeline"><option value="">Any</option>${pipeOpts(c.pipelineId)}</select></div><div class="field"><label>Moved to stage</label><select id="wc-stage"><option value="">Any stage</option>${stageOpts.map(st=>`<option ${c.stage===st?'selected':''}>${esc(st)}</option>`).join('')}</select></div>${common}</div>`;
+    if(trig==='no_activity') return `<div class="grid2"><div class="field"><label>Days without activity</label><input id="wc-days" type="number" min="1" value="${esc(c.days||14)}"></div><div class="field"><label>Pipeline (optional)</label><select id="wc-pipeline"><option value="">Any</option>${pipeOpts(c.pipelineId)}</select></div><div class="field"><label>In stage (optional)</label><select id="wc-stage"><option value="">Any stage</option>${stageOpts.map(st=>`<option ${c.stage===st?'selected':''}>${esc(st)}</option>`).join('')}</select></div>${common}</div><p class="note">Runs hourly; fires at most once per deal per N days.</p>`;
+    if(trig==='form_submitted') return `<div class="grid2"><div class="field"><label>Form</label><select id="wc-form"><option value="">Any form</option>${db.forms.map(f=>`<option value="${f.id}" ${String(f.id)===String(c.formId)?'selected':''}>${esc(f.name)}</option>`).join('')}</select></div>${common}</div>`;
+    if(trig==='deal_created'||trig==='deal_won'||trig==='deal_lost') return `<div class="grid2"><div class="field"><label>Pipeline (optional)</label><select id="wc-pipeline"><option value="">Any</option>${pipeOpts(c.pipelineId)}</select></div><div class="field"><label>Minimum value (optional)</label><input id="wc-min" type="number" min="0" value="${esc(c.minValue||'')}"></div>${common}</div>`;
+    return `<div class="grid2">${common}</div>`;
+  };
+  openDrawer(`${dhead(id?'Edit workflow':'New workflow', id?`${w.runs} runs`:'')}
+    <div class="grid2"><div class="field"><label>Name</label><input id="wf-name" value="${esc(w.name)}" placeholder="Proposal follow-up"></div><div class="field"><label>Status</label><select id="wf-active"><option value="1" ${w.active?'selected':''}>On</option><option value="0" ${!w.active?'selected':''}>Off</option></select></div></div>
+    <h3 style="margin:12px 0 8px">When</h3>
+    <div class="field"><select id="wf-trigger">${Object.entries(TRIG_LABEL).map(([k,l])=>`<option value="${k}" ${w.trigger===k?'selected':''}>${esc(l)}</option>`).join('')}</select></div>
+    <div id="wf-cond">${condHtml(w.trigger)}</div>
+    <h3 style="margin:12px 0 8px">Then</h3>
+    <div id="wf-actions">${w.actions.map(actionHtml).join('')}</div>
+    <div class="row"><button class="btn sm" id="wf-add" type="button">Add action</button></div>
+    ${id?`<div class="section"><h3>Recent runs</h3><div id="wf-runs"><div class="empty">Loading…</div></div></div>`:''}
+    <div class="row" style="margin-top:16px"><button class="btn primary" id="wf-save">${id?'Save workflow':'Create workflow'}</button>${id?`<button class="btn ghost danger" id="wf-del">Delete</button>`:''}</div>`);
+  const acts = drawer.querySelector('#wf-actions');
+  const bind = ()=>{ acts.querySelectorAll('[data-act]').forEach(el=>{ el.querySelector('.wa-del').onclick=()=>el.remove(); el.querySelector('.wa-type').onchange=e=>{ el.querySelector('.wa-body').innerHTML = actionBody({type:e.target.value}); bindChips(el); }; }); bindChips(acts); };
+  bind();
+  drawer.querySelector('#wf-add').onclick = ()=>{ acts.insertAdjacentHTML('beforeend', actionHtml({type:'notify_owner'},99)); bind(); };
+  drawer.querySelector('#wf-trigger').onchange = e=>{ drawer.querySelector('#wf-cond').innerHTML = condHtml(e.target.value); };
+  drawer.querySelector('#wf-save').onclick = async ()=>{
+    const g = sel=>{ const el=drawer.querySelector(sel); return el?el.value.trim():''; };
+    const conditions = { pipelineId:g('#wc-pipeline'), stage:g('#wc-stage'), vertical:g('#wc-vertical'), source:g('#wc-source'), ownerId:g('#wc-owner'), formId:g('#wc-form'), days:g('#wc-days'), minValue:g('#wc-min') };
+    const actions = [...acts.querySelectorAll('[data-act]')].map(el=>{ const v=cls=>{ const x=el.querySelector(cls); return x?x.value.trim():''; }; return { type:el.querySelector('.wa-type').value, title:v('.wa-title'), dueDays:v('.wa-due'), assignee:v('.wa-assignee'), subject:v('.wa-subject'), message:v('.wa-message'), body:v('.wa-ebody'), sequenceId:v('.wa-seq'), userId:v('.wa-user'), stage:v('.wa-stage'), text:v('.wa-text') }; });
+    if(!dv('#wf-name')||!actions.length){ toast('Name and at least one action', true); return; }
+    await tryApi(()=>api(id?`/api/workflows/${id}`:'/api/workflows',{method:id?'PUT':'POST',body:{name:dv('#wf-name'),active:dv('#wf-active')==='1',trigger:dv('#wf-trigger'),conditions,actions}}));
+    await refresh(); closeDrawer(); toast(id?'Workflow saved':'Workflow created');
+  };
+  const del = drawer.querySelector('#wf-del'); if(del) del.onclick = async ()=>{ if(!confirm(`Delete "${w.name}"?`)) return; await tryApi(()=>api(`/api/workflows/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); };
+  if(id){ api(`/api/workflows/${id}/runs`).then(runs=>{ const el=drawer.querySelector('#wf-runs'); if(!el) return; el.innerHTML = runs.length ? runs.slice(0,20).map(r=>`<div class="act"><span class="t">${fmtDate(r.at)}</span><span>${r.dealId?`<a data-open-deal="${r.dealId}" style="cursor:pointer;text-decoration:underline">${esc(r.dealName||'deal')}</a>`:r.contactId?`<a data-open-contact="${r.contactId}" style="cursor:pointer;text-decoration:underline">${esc(r.contactName||'contact')}</a>`:''} <span class="muted">— ${esc(r.summary||'no actions applied')}</span></span></div>`).join('') : '<div class="empty">Hasn\'t run yet</div>'; el.querySelectorAll('[data-open-deal]').forEach(a=>a.onclick=()=>openDetail('deal',a.dataset.openDeal)); el.querySelectorAll('[data-open-contact]').forEach(a=>a.onclick=()=>openDetail('contact',a.dataset.openContact)); }).catch(()=>{}); }
+}
+
+/* ---------- profile ---------- */
+function openProfile(){
+  const u = byId(db.users, me.id) || me;
+  openDrawer(`${dhead('My profile', esc(u.email))}
+    <div class="field"><label>Meeting booking link</label><input id="pf-booking" value="${esc(u.bookingUrl||'')}" placeholder="https://calendar.app.google/…"><div class="note" style="margin-top:4px">Google Calendar → Appointment schedules → share link. Used by the "Book a meeting" button and the <code>{{meeting_link}}</code> merge tag in emails and sequences.</div></div>
+    <div class="field"><label class="inline"><input type="checkbox" id="pf-sync" ${u.calendarSync!==false?'checked':''}> Sync my Google Calendar (meetings with contacts get logged automatically)</label></div>
+    ${integrations.calendar?'':'<p class="note">Calendar sync isn\'t connected yet — an admin can set it up under Settings.</p>'}
+    <div class="row"><button class="btn primary" id="pf-save">Save</button></div>`);
+  drawer.querySelector('#pf-save').onclick = async ()=>{ await tryApi(()=>api('/api/me',{method:'PUT',body:{bookingUrl:dv('#pf-booking'),calendarSync:drawer.querySelector('#pf-sync').checked}})); await refresh(); closeDrawer(); toast('Profile saved'); };
+}
+function meetingsSection(){ return `<div class="section"><h3>Meetings</h3><div id="mt-list"><div class="empty">Loading…</div></div></div>`; }
+async function loadMeetings(params){
+  const el = drawer.querySelector('#mt-list'); if(!el) return;
+  try{ const ms = await api('/api/meetings?'+new URLSearchParams(params));
+    el.innerHTML = ms.length ? ms.map(m=>`<div class="enr"><div><b>${esc(m.title)}</b><div class="s">${new Date(m.startsAt).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} · ${esc(userName(m.userId))} · ${m.status}</div></div>${m.link?`<a class="btn sm" href="${esc(m.link)}" target="_blank" rel="noopener">Open</a>`:''}</div>`).join('') : `<div class="empty">${integrations.calendar?'No meetings with this contact on synced calendars':'Calendar sync not connected — log meetings in Activity'}</div>`;
+  }catch(e){ el.innerHTML='<div class="empty">Couldn\'t load</div>'; }
+}
+function visitsSection(){ return `<div class="section"><h3>Website activity</h3><div id="vs-list"><div class="empty">Loading…</div></div></div>`; }
+async function loadVisits(contactId){
+  const el = drawer.querySelector('#vs-list'); if(!el) return;
+  try{ const vs = await api(`/api/contacts/${contactId}/visits`);
+    el.innerHTML = vs.length ? vs.slice(0,30).map(v=>`<div class="visit"><div>${esc(v.title||v.url.replace(/^https?:\/\/[^/]+/,'')||'/')}<div class="u">${esc(v.url.replace(/^https?:\/\//,''))}</div></div><span class="muted" style="font-size:12px;white-space:nowrap">${new Date(v.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span></div>`).join('') : '<div class="empty">No tracked visits yet (install the tracking script under Forms)</div>';
+  }catch(e){ el.innerHTML='<div class="empty">Couldn\'t load</div>'; }
+}
+
 /* ---------- team (admin) ---------- */
 function renderTeam(){
   return `<div class="top"><h1>Team</h1><div class="actions"><button class="btn primary" data-new="user">Add user</button></div></div>
@@ -662,6 +812,12 @@ async function loadSettings(){
         <p class="note" style="margin-top:14px"><b>Status updates:</b> in DocuSign → Settings → Connect, add a configuration pointing at <code>${esc(s.webhookUrl)}</code>, format JSON, events: envelope sent/delivered/completed/declined/voided. Set an HMAC key there and put the same value in <code>DS_WEBHOOK_SECRET</code>${ds.webhookSecretSet?' (set)':' (not set)'}. Without Connect, use the Refresh button on each envelope.</p>
       </div>
     </div>
+    <div class="section"><h3>Google Calendar sync</h3>
+      ${s.calendar.configured ? `<div class="okbox">Connected as service account ${esc(s.calendar.serviceAccount)}${s.calendar.lastSync?` · last sync ${new Date(s.calendar.lastSync).toLocaleTimeString()}`:''}${s.calendar.lastError?` · <span style="color:var(--lost)">${esc(s.calendar.lastError)}</span>`:''}</div><button class="btn sm" id="cal-sync">Sync now</button>`
+      : `<div class="warnbox">Not connected. Meetings can still be logged manually in Activity; each user can set a booking link in My profile.</div>
+         <p class="note">Setup (you're the Workspace admin, ~10 min): 1) console.cloud.google.com → new project → enable <b>Google Calendar API</b> → Credentials → Create <b>Service account</b> → Keys → Add key (JSON) → download. 2) On the service account, copy its <b>Client ID</b> (numeric). 3) admin.google.com → Security → Access and data control → API controls → <b>Domain-wide delegation</b> → Add new → paste the Client ID, scope <code>https://www.googleapis.com/auth/calendar.readonly</code> → Authorize. 4) On Render add <code>GOOGLE_SA_JSON_B64</code> = base64 of the JSON file (<code>base64 -i key.json | tr -d '\\n'</code>). Redeploys and starts syncing every 10 minutes.</p>`}
+      <p class="note" style="margin-top:10px">Each team member's primary calendar is read; events with a contact's email as attendee are logged (scheduled → held → cancelled) on the contact and the open deal.</p>
+    </div>
     <div class="section"><h3>Pipelines <button class="btn sm" id="pipe-new">Add pipeline</button></h3>
       <p class="note">Each stage carries a win probability used for the weighted forecast. Flag the won stage and the stages where signatures can be sent.</p>
       <table><thead><tr><th>Pipeline</th><th>Stages</th><th>Deals</th><th></th></tr></thead><tbody>${db.pipelines.map(p=>`<tr><td><strong>${esc(p.name)}</strong>${p.isDefault?' <span class="tag m">Default</span>':''}</td><td class="muted" style="font-size:13px">${p.stages.map(st=>`${esc(st.name)} ${st.probability}%${st.won?' ✓':''}`).join(' → ')}</td><td>${db.deals.filter(d=>String(d.pipelineId)===String(p.id)).length}</td><td style="text-align:right;white-space:nowrap"><button class="btn sm" data-pipe-edit="${p.id}">Edit</button></td></tr>`).join('')}</tbody></table>
@@ -677,6 +833,7 @@ async function loadSettings(){
     </div>`;
     const tm = document.getElementById('test-mail'); if(tm) tm.onclick = async ()=>{ await tryApi(()=>api('/api/settings/test-email',{method:'POST'})); toast('Test email sent'); };
     el.querySelector('#prop-new').onclick = ()=>openPropertyForm();
+    const cs = el.querySelector('#cal-sync'); if(cs) cs.onclick = async ()=>{ cs.disabled=true; const st=await tryApi(()=>api('/api/meetings/sync',{method:'POST'})); await refresh(); loadSettings(); toast(st.lastError?('Sync error: '+st.lastError):'Calendar synced', !!st.lastError); };
     el.querySelector('#pipe-new').onclick = ()=>openPipelineForm();
     el.querySelectorAll('[data-pipe-edit]').forEach(b=>b.onclick=()=>openPipelineForm(b.dataset.pipeEdit));
     el.querySelector('#prod-new').onclick = ()=>openProductForm();
@@ -817,8 +974,8 @@ function renderAnalytics(){
 /* ---------- main bindings ---------- */
 function bindMain(){
   const m = document.getElementById('main');
-  m.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>b.dataset.new==='sequence'?openSequenceForm():openForm(b.dataset.new));
-  m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>{ if(r.dataset.open==='sequence') openSequenceForm(r.dataset.id); else openDetail(r.dataset.open, r.dataset.id); });
+  m.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>({sequence:()=>openSequenceForm(), form:()=>openFormEditor(), workflow:()=>openWorkflowEditor()}[b.dataset.new]||(()=>openForm(b.dataset.new)))());
+  m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>{ const k=r.dataset.open; if(k==='sequence') openSequenceForm(r.dataset.id); else if(k==='form') openFormEditor(r.dataset.id); else if(k==='workflow') openWorkflowEditor(r.dataset.id); else openDetail(k, r.dataset.id); });
   m.querySelectorAll('[data-mine]').forEach(b=>b.onclick=()=>{ mineOnly=b.dataset.mine==='1'; render(); });
   const ps = m.querySelector('#pipe-sel'); if(ps) ps.onchange = ()=>{ curPipeline = ps.value; render(); };
   m.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; render(); });
@@ -1045,6 +1202,7 @@ async function openDetail(kind, id){
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Deal value</span><span>${d.value?fmtMoney(d.value):'—'}${d.valueAuto?' <span class="muted" style="font-size:12px">from line items</span>':''}${!d.lost&&!isWon(d)?` · <span class="muted" style="font-size:12px">${probOf(d)}% → ${fmtMoney((Number(d.value)||0)*probOf(d)/100)} weighted</span>`:''}</span>
       <span class="k">Pipeline</span><span>${esc(dpipe.name||'')}</span>
+      ${db.meetings.filter(m=>String(m.dealId)===String(d.id) && new Date(m.startsAt)>new Date()).slice(0,1).map(m=>`<span class="k">Next meeting</span><span>${esc(m.title)} · ${new Date(m.startsAt).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>`).join('')}
       <span class="k">Owner</span><span>${esc(userName(d.ownerId)||'—')}</span>
       <span class="k">Expected close</span><span>${d.expectedClose?fmtDay(d.expectedClose):'—'}</span>
       <span class="k">Vertical</span><span>${esc(d.vertical||'—')}</span>
@@ -1083,7 +1241,7 @@ async function openDetail(kind, id){
     const co = byId(db.companies,c.companyId), ds = dealsOf.contact(c.id);
     const reopen = ()=>openDetail('contact',id);
     openDrawer(`${dhead(esc(fullName(c)), `${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:''}`)}
-    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
+    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}${(byId(db.users,me.id)||{}).bookingUrl?`<a class="btn sm" href="${esc((byId(db.users,me.id)||{}).bookingUrl)}" target="_blank" rel="noopener">Book a meeting</a>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Email</span><span>${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</span>
       <span class="k">Phone</span><span>${c.phone?`<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:'—'}</span>
@@ -1100,9 +1258,12 @@ async function openDetail(kind, id){
       ${ds.length ? ds.map(d=>`<div class="act" style="cursor:pointer" data-open-deal="${d.id}"><span style="flex:1"><strong>${esc(d.name)}</strong> <span class="muted">${d.value?fmtMoney(d.value):''}</span></span>${stageTag(d)}</div>`).join('') : `<div class="empty">No deals yet</div>`}
     </div>
     ${tasksSection('contactId', c.id, {contactId:c.id})}
+    ${meetingsSection()}
     ${emailsSection()}
+    ${visitsSection()}
     ${activitySection()}`);
     drawer.querySelector('#c-edit').onclick = ()=>openForm('contact',id);
+    loadMeetings({contactId:c.id}); loadVisits(c.id);
     const ce = drawer.querySelector('#c-email'); if(ce) ce.onclick = ()=>openCompose({contact:c, deal: ds.find(dealOpen)||null});
     const cen = drawer.querySelector('#c-enroll'); if(cen) cen.onclick = ()=>openEnroll(c, (ds.find(dealOpen)||{}).id);
     bindEnrollStops(drawer, reopen);
