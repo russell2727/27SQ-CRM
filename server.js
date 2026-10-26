@@ -6,18 +6,20 @@ const express = require('express');
 const session = require('express-session');
 const PgSession = require('connect-pg-simple')(session);
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+types.setTypeParser(1082, v => v); // DATE columns as 'YYYY-MM-DD' strings, not JS Dates
+const mailer = require('./lib/mail');
+const docusign = require('./lib/docusign');
 
 const PORT = process.env.PORT || 3000;
-const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
+const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
+const APP_URL = (process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 
 if (!process.env.DATABASE_URL) {
-  console.error('DATABASE_URL is not set. Add a Postgres service on Railway and reference its DATABASE_URL.');
+  console.error('DATABASE_URL is not set.');
   process.exit(1);
 }
-if (!process.env.SESSION_SECRET) {
-  console.warn('SESSION_SECRET is not set — using a random one; every deploy will log all users out.');
-}
+if (!process.env.SESSION_SECRET) console.warn('SESSION_SECRET is not set — using a random one; every deploy will log all users out.');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -26,11 +28,16 @@ const pool = new Pool({
 const q = (text, params) => pool.query(text, params);
 
 const STAGES = ['New lead', 'Contacted', 'Qualified', 'Proposal sent', 'Closed won'];
+const SIGN_STAGES = ['Proposal sent', 'Closed won'];
 
 /* ---------- app ---------- */
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '5mb' }));
+
+// DocuSign Connect webhook needs the raw body for HMAC verification; mount before json().
+app.post('/api/docusign/webhook', express.raw({ type: '*/*', limit: '10mb' }), (req, res, next) => handleWebhook(req, res).catch(next));
+
+app.use(express.json({ limit: '20mb' }));
 app.use(session({
   store: new PgSession({ pool, createTableIfMissing: true }),
   secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
@@ -46,22 +53,49 @@ const requireAuth = (req, res, next) => req.session.user ? next() : res.status(4
 const requireAdmin = (req, res, next) => req.session.user && req.session.user.role === 'admin' ? next() : res.status(403).json({ error: 'Admin only' });
 const str = v => (v == null ? '' : String(v)).trim();
 const num = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0; };
+const intOrNull = v => { const n = Number(v); return v !== '' && v != null && Number.isInteger(n) ? n : null; };
+const dateOrNull = v => { const s = str(v); return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null; };
 const publicUser = u => ({ id: u.id, email: u.email, name: u.name, role: u.role, active: u.active, createdAt: u.created_at });
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const contactOut = r => ({
   id: r.id, first: r.first_name, last: r.last_name, title: r.title, email: r.email, phone: r.phone,
-  companyId: r.company_id, vertical: r.vertical, source: r.source, stage: r.stage, value: Number(r.value),
-  notes: r.notes, lost: r.lost, lostAt: r.lost_at, wonAt: r.won_at, stageHistory: r.stage_history || [],
+  companyId: r.company_id, vertical: r.vertical, source: r.source, notes: r.notes,
   ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 const companyOut = r => ({
   id: r.id, name: r.name, domain: r.domain, phone: r.phone, vertical: r.vertical, size: r.size,
   city: r.city, state: r.state, notes: r.notes, createdAt: r.created_at,
 });
-const activityOut = r => ({ id: r.id, contactId: r.contact_id, userId: r.user_id, userName: r.user_name, type: r.type, text: r.text, at: r.created_at });
+const dealOut = r => ({
+  id: r.id, name: r.name, contactId: r.contact_id, companyId: r.company_id, stage: r.stage, value: Number(r.value),
+  vertical: r.vertical, source: r.source, expectedClose: r.expected_close || null, notes: r.notes,
+  lost: r.lost, lostAt: r.lost_at, wonAt: r.won_at, stageHistory: r.stage_history || [],
+  ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at,
+});
+const taskOut = r => ({
+  id: r.id, title: r.title, dueAt: r.due_at || null, done: r.done, doneAt: r.done_at,
+  dealId: r.deal_id, contactId: r.contact_id, assigneeId: r.assignee_id, createdBy: r.created_by, createdAt: r.created_at,
+});
+const envelopeOut = r => ({
+  id: r.id, dealId: r.deal_id, envelopeId: r.envelope_id, templateId: r.template_id, templateName: r.template_name,
+  signerName: r.signer_name, signerEmail: r.signer_email, status: r.status, sentBy: r.sent_by, sentAt: r.sent_at, completedAt: r.completed_at,
+});
+const activityOut = r => ({ id: r.id, contactId: r.contact_id, dealId: r.deal_id, userId: r.user_id, userName: r.user_name, type: r.type, text: r.text, at: r.created_at });
 
-async function logActivity(contactId, userId, type, text) {
-  await q('INSERT INTO activities (contact_id, user_id, type, text) VALUES ($1,$2,$3,$4)', [contactId, userId, type, text]);
+async function logActivity({ contactId = null, dealId = null, userId = null, type = 'Note', text }) {
+  await q('INSERT INTO activities (contact_id, deal_id, user_id, type, text) VALUES ($1,$2,$3,$4,$5)', [contactId, dealId, userId, type, text]);
+}
+async function userById(id) { if (!id) return null; const { rows } = await q('SELECT * FROM users WHERE id=$1 AND active', [id]); return rows[0] || null; }
+async function dealById(id) { const { rows } = await q('SELECT * FROM deals WHERE id=$1', [id]); return rows[0] || null; }
+const dealLink = id => `${APP_URL}/#deal/${id}`;
+
+/* ---------- notifications ---------- */
+async function notifyUser(userId, subject, html, actorId) {
+  if (!userId || String(userId) === String(actorId)) return;
+  const u = await userById(userId);
+  if (!u) return;
+  mailer.send({ to: u.email, subject, html }).catch(e => console.error('Mail failed:', e.message));
 }
 
 /* ---------- auth ---------- */
@@ -70,14 +104,12 @@ app.get('/api/auth/status', wrap(async (req, res) => {
   res.json({ needsSetup: rows[0].n === 0, user: req.session.user || null });
 }));
 
-// First-run only: creates the admin account.
 app.post('/api/auth/setup', wrap(async (req, res) => {
   const { rows } = await q('SELECT COUNT(*)::int AS n FROM users');
   if (rows[0].n > 0) return res.status(403).json({ error: 'Setup already completed' });
   const email = str(req.body.email).toLowerCase(), name = str(req.body.name), password = String(req.body.password || '');
   if (!email || !name || password.length < 8) return res.status(400).json({ error: 'Name, email and a password of 8+ characters are required' });
-  const hash = await bcrypt.hash(password, 11);
-  const ins = await q('INSERT INTO users (email, name, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING *', [email, name, hash, 'admin']);
+  const ins = await q('INSERT INTO users (email, name, password_hash, role) VALUES ($1,$2,$3,$4) RETURNING *', [email, name, await bcrypt.hash(password, 11), 'admin']);
   req.session.user = publicUser(ins.rows[0]);
   res.json({ user: req.session.user });
 }));
@@ -86,9 +118,7 @@ app.post('/api/auth/login', wrap(async (req, res) => {
   const email = str(req.body.email).toLowerCase(), password = String(req.body.password || '');
   const { rows } = await q('SELECT * FROM users WHERE email=$1', [email]);
   const u = rows[0];
-  if (!u || !u.active || !(await bcrypt.compare(password, u.password_hash))) {
-    return res.status(401).json({ error: 'Email or password is incorrect' });
-  }
+  if (!u || !u.active || !(await bcrypt.compare(password, u.password_hash))) return res.status(401).json({ error: 'Email or password is incorrect' });
   req.session.user = publicUser(u);
   res.json({ user: req.session.user });
 }));
@@ -106,17 +136,25 @@ app.post('/api/auth/password', requireAuth, wrap(async (req, res) => {
 
 /* ---------- bootstrap ---------- */
 app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, users] = await Promise.all([
+  const [contacts, companies, deals, tasks, envelopes, users] = await Promise.all([
     q('SELECT * FROM contacts ORDER BY created_at DESC'),
     q('SELECT * FROM companies ORDER BY name'),
+    q('SELECT * FROM deals ORDER BY created_at DESC'),
+    q('SELECT * FROM tasks ORDER BY done, due_at NULLS LAST, created_at'),
+    q('SELECT * FROM envelopes ORDER BY sent_at DESC'),
     q('SELECT id, name, email, role, active, created_at FROM users ORDER BY name'),
   ]);
   res.json({
     user: req.session.user,
     contacts: contacts.rows.map(contactOut),
     companies: companies.rows.map(companyOut),
+    deals: deals.rows.map(dealOut),
+    tasks: tasks.rows.map(taskOut),
+    envelopes: envelopes.rows.map(envelopeOut),
     users: users.rows.map(publicUser),
     stages: STAGES,
+    signStages: SIGN_STAGES,
+    integrations: { docusign: docusign.configured(), email: mailer.configured() },
   });
 }));
 
@@ -144,59 +182,35 @@ app.delete('/api/companies/:id', requireAuth, wrap(async (req, res) => {
 /* ---------- contacts ---------- */
 const contactFields = b => ({
   first: str(b.first), last: str(b.last), title: str(b.title), email: str(b.email).toLowerCase(), phone: str(b.phone),
-  companyId: b.companyId ? Number(b.companyId) : null, vertical: str(b.vertical), source: str(b.source),
-  stage: STAGES.includes(b.stage) ? b.stage : 'New lead', value: num(b.value), notes: str(b.notes),
-  ownerId: b.ownerId ? Number(b.ownerId) : null,
+  companyId: intOrNull(b.companyId), vertical: str(b.vertical), source: str(b.source), notes: str(b.notes), ownerId: intOrNull(b.ownerId),
 });
 
 app.post('/api/contacts', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
-  const history = JSON.stringify([{ stage: f.stage, at: new Date().toISOString(), by: req.session.user.id }]);
-  const wonAt = f.stage === 'Closed won' ? new Date() : null;
   const { rows } = await q(
-    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,stage,value,notes,owner_id,created_by,stage_history,won_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.stage, f.value, f.notes, f.ownerId || req.session.user.id, req.session.user.id, history, wonAt]);
-  res.json(contactOut(rows[0]));
+    `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId || req.session.user.id, req.session.user.id]);
+  const contact = rows[0];
+  let deal = null;
+  if (req.body.createDeal) {
+    deal = await createDeal({
+      name: str(req.body.dealName) || (contact.company_id ? (await q('SELECT name FROM companies WHERE id=$1', [contact.company_id])).rows[0]?.name : '') || `${f.first} ${f.last}`.trim(),
+      contactId: contact.id, companyId: contact.company_id, stage: STAGES.includes(req.body.stage) ? req.body.stage : 'New lead',
+      value: num(req.body.value), vertical: f.vertical, source: f.source, ownerId: contact.owner_id, expectedClose: null, notes: '',
+    }, req.session.user.id);
+  }
+  res.json({ contact: contactOut(contact), deal: deal && dealOut(deal) });
 }));
 
 app.put('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
   const f = contactFields(req.body);
   if (!f.first && !f.last) return res.status(400).json({ error: 'Add at least a first or last name' });
-  const cur = (await q('SELECT * FROM contacts WHERE id=$1', [req.params.id])).rows[0];
-  if (!cur) return res.status(404).json({ error: 'Contact not found' });
-  let history = cur.stage_history || [], wonAt = cur.won_at;
-  if (cur.stage !== f.stage) {
-    history = [...history, { stage: f.stage, at: new Date().toISOString(), by: req.session.user.id }];
-    if (f.stage === 'Closed won') wonAt = new Date();
-    await logActivity(cur.id, req.session.user.id, 'Note', `Moved to ${f.stage}`);
-  }
   const { rows } = await q(
-    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,stage=$9,value=$10,notes=$11,owner_id=$12,stage_history=$13,won_at=$14,updated_at=now()
-     WHERE id=$15 RETURNING *`,
-    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.stage, f.value, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id]);
-  res.json(contactOut(rows[0]));
-}));
-
-app.patch('/api/contacts/:id/stage', requireAuth, wrap(async (req, res) => {
-  const stage = req.body.stage;
-  if (!STAGES.includes(stage)) return res.status(400).json({ error: 'Unknown stage' });
-  const cur = (await q('SELECT * FROM contacts WHERE id=$1', [req.params.id])).rows[0];
-  if (!cur) return res.status(404).json({ error: 'Contact not found' });
-  if (cur.stage === stage && !cur.lost) return res.json(contactOut(cur));
-  const history = [...(cur.stage_history || []), { stage, at: new Date().toISOString(), by: req.session.user.id }];
-  const wonAt = stage === 'Closed won' ? new Date() : cur.won_at;
-  const { rows } = await q('UPDATE contacts SET stage=$1, lost=FALSE, lost_at=NULL, stage_history=$2, won_at=$3, updated_at=now() WHERE id=$4 RETURNING *', [stage, JSON.stringify(history), wonAt, cur.id]);
-  await logActivity(cur.id, req.session.user.id, 'Note', `Moved to ${stage}`);
-  res.json(contactOut(rows[0]));
-}));
-
-app.patch('/api/contacts/:id/lost', requireAuth, wrap(async (req, res) => {
-  const lost = !!req.body.lost;
-  const { rows } = await q('UPDATE contacts SET lost=$1, lost_at=$2, updated_at=now() WHERE id=$3 RETURNING *', [lost, lost ? new Date() : null, req.params.id]);
+    `UPDATE contacts SET first_name=$1,last_name=$2,title=$3,email=$4,phone=$5,company_id=$6,vertical=$7,source=$8,notes=$9,owner_id=$10,updated_at=now() WHERE id=$11 RETURNING *`,
+    [f.first, f.last, f.title, f.email, f.phone, f.companyId, f.vertical, f.source, f.notes, f.ownerId, req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Contact not found' });
-  await logActivity(rows[0].id, req.session.user.id, 'Note', lost ? 'Marked lost' : 'Reopened');
   res.json(contactOut(rows[0]));
 }));
 
@@ -205,25 +219,274 @@ app.delete('/api/contacts/:id', requireAuth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ---------- activities ---------- */
-app.get('/api/contacts/:id/activities', requireAuth, wrap(async (req, res) => {
-  const { rows } = await q('SELECT a.*, u.name AS user_name FROM activities a LEFT JOIN users u ON u.id=a.user_id WHERE a.contact_id=$1 ORDER BY a.created_at DESC', [req.params.id]);
-  res.json(rows.map(activityOut));
+/* ---------- deals ---------- */
+const dealFields = b => ({
+  name: str(b.name), contactId: intOrNull(b.contactId), companyId: intOrNull(b.companyId),
+  stage: STAGES.includes(b.stage) ? b.stage : 'New lead', value: num(b.value), vertical: str(b.vertical), source: str(b.source),
+  expectedClose: dateOrNull(b.expectedClose), notes: str(b.notes), ownerId: intOrNull(b.ownerId),
+});
+
+async function createDeal(f, actorId) {
+  const history = JSON.stringify([{ stage: f.stage, at: new Date().toISOString(), by: actorId }]);
+  const wonAt = f.stage === 'Closed won' ? new Date() : null;
+  const { rows } = await q(
+    `INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,expected_close,notes,owner_id,created_by,stage_history,won_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId || actorId, actorId, history, wonAt]);
+  const d = rows[0];
+  if (d.owner_id && String(d.owner_id) !== String(actorId)) {
+    const actor = await userById(actorId);
+    await notifyUser(d.owner_id, `Deal assigned to you: ${d.name}`,
+      `<p>${esc(actor?.name || 'A teammate')} assigned you the deal <b>${esc(d.name)}</b> (${esc(d.stage)}).</p><p><a href="${dealLink(d.id)}">Open it in the CRM</a></p>`, actorId);
+  }
+  return d;
+}
+
+app.post('/api/deals', requireAuth, wrap(async (req, res) => {
+  const f = dealFields(req.body);
+  if (!f.name) return res.status(400).json({ error: 'Deal name is required' });
+  if (!f.companyId && f.contactId) f.companyId = (await q('SELECT company_id FROM contacts WHERE id=$1', [f.contactId])).rows[0]?.company_id || null;
+  const d = await createDeal(f, req.session.user.id);
+  res.json(dealOut(d));
 }));
-app.post('/api/contacts/:id/activities', requireAuth, wrap(async (req, res) => {
-  const text = str(req.body.text), type = str(req.body.type) || 'Note';
-  if (!text) return res.status(400).json({ error: 'Activity text is required' });
-  await logActivity(req.params.id, req.session.user.id, type, text);
+
+app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
+  const f = dealFields(req.body);
+  if (!f.name) return res.status(400).json({ error: 'Deal name is required' });
+  const cur = await dealById(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Deal not found' });
+  let history = cur.stage_history || [], wonAt = cur.won_at;
+  const me = req.session.user;
+  if (cur.stage !== f.stage) {
+    history = [...history, { stage: f.stage, at: new Date().toISOString(), by: me.id }];
+    if (f.stage === 'Closed won') wonAt = new Date();
+    await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${f.stage}` });
+    await notifyUser(cur.owner_id, `${cur.name}: moved to ${f.stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(f.stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
+  }
+  const { rows } = await q(
+    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,updated_at=now()
+     WHERE id=$13 RETURNING *`,
+    [f.name, f.contactId, f.companyId, f.stage, f.value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id]);
+  if (f.ownerId && String(f.ownerId) !== String(cur.owner_id)) {
+    await notifyUser(f.ownerId, `Deal assigned to you: ${f.name}`, `<p>${esc(me.name)} assigned you the deal <b>${esc(f.name)}</b> (${esc(f.stage)}).</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
+  }
+  res.json(dealOut(rows[0]));
+}));
+
+app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
+  const stage = req.body.stage;
+  if (!STAGES.includes(stage)) return res.status(400).json({ error: 'Unknown stage' });
+  const cur = await dealById(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Deal not found' });
+  if (cur.stage === stage && !cur.lost) return res.json(dealOut(cur));
+  const me = req.session.user;
+  const history = [...(cur.stage_history || []), { stage, at: new Date().toISOString(), by: me.id }];
+  const wonAt = stage === 'Closed won' ? new Date() : cur.won_at;
+  const { rows } = await q('UPDATE deals SET stage=$1, lost=FALSE, lost_at=NULL, stage_history=$2, won_at=$3, updated_at=now() WHERE id=$4 RETURNING *', [stage, JSON.stringify(history), wonAt, cur.id]);
+  await logActivity({ dealId: cur.id, contactId: cur.contact_id, userId: me.id, text: `Moved to ${stage}` });
+  await notifyUser(cur.owner_id, `${cur.name}: moved to ${stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
+  res.json(dealOut(rows[0]));
+}));
+
+app.patch('/api/deals/:id/lost', requireAuth, wrap(async (req, res) => {
+  const lost = !!req.body.lost;
+  const { rows } = await q('UPDATE deals SET lost=$1, lost_at=$2, updated_at=now() WHERE id=$3 RETURNING *', [lost, lost ? new Date() : null, req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Deal not found' });
+  await logActivity({ dealId: rows[0].id, contactId: rows[0].contact_id, userId: req.session.user.id, text: lost ? 'Marked lost' : 'Reopened' });
+  res.json(dealOut(rows[0]));
+}));
+
+app.delete('/api/deals/:id', requireAuth, wrap(async (req, res) => {
+  await q('DELETE FROM deals WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
+
+/* ---------- activities ---------- */
+app.get('/api/activities', requireAuth, wrap(async (req, res) => {
+  const where = req.query.dealId ? ['a.deal_id=$1', req.query.dealId] : req.query.contactId ? ['a.contact_id=$1', req.query.contactId] : null;
+  if (!where) return res.status(400).json({ error: 'dealId or contactId required' });
+  const { rows } = await q(`SELECT a.*, u.name AS user_name FROM activities a LEFT JOIN users u ON u.id=a.user_id WHERE ${where[0]} ORDER BY a.created_at DESC LIMIT 200`, [where[1]]);
+  res.json(rows.map(activityOut));
+}));
+app.post('/api/activities', requireAuth, wrap(async (req, res) => {
+  const text = str(req.body.text), type = str(req.body.type) || 'Note';
+  const dealId = intOrNull(req.body.dealId), contactId = intOrNull(req.body.contactId);
+  if (!text) return res.status(400).json({ error: 'Activity text is required' });
+  if (!dealId && !contactId) return res.status(400).json({ error: 'dealId or contactId required' });
+  let cid = contactId;
+  if (dealId && !cid) cid = (await dealById(dealId))?.contact_id || null;
+  await logActivity({ dealId, contactId: cid, userId: req.session.user.id, type, text });
+  res.json({ ok: true });
+}));
+
+/* ---------- tasks ---------- */
+app.post('/api/tasks', requireAuth, wrap(async (req, res) => {
+  const title = str(req.body.title); if (!title) return res.status(400).json({ error: 'Task title is required' });
+  const dealId = intOrNull(req.body.dealId), assigneeId = intOrNull(req.body.assigneeId) || req.session.user.id;
+  let contactId = intOrNull(req.body.contactId);
+  if (dealId && !contactId) contactId = (await dealById(dealId))?.contact_id || null;
+  const { rows } = await q('INSERT INTO tasks (title,due_at,deal_id,contact_id,assignee_id,created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [title, dateOrNull(req.body.dueAt), dealId, contactId, assigneeId, req.session.user.id]);
+  const t = rows[0];
+  if (String(assigneeId) !== String(req.session.user.id)) {
+    const d = dealId ? await dealById(dealId) : null;
+    await notifyUser(assigneeId, `Task for you: ${title}`, `<p>${esc(req.session.user.name)} assigned you a task${d ? ` on <b>${esc(d.name)}</b>` : ''}:</p><p><b>${esc(title)}</b>${t.due_at ? ` — due ${String(t.due_at).slice(0, 10)}` : ''}</p><p><a href="${APP_URL}/#tasks">Open tasks</a></p>`, req.session.user.id);
+  }
+  res.json(taskOut(t));
+}));
+app.put('/api/tasks/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM tasks WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ error: 'Task not found' });
+  const title = req.body.title != null ? str(req.body.title) : cur.title;
+  const done = req.body.done != null ? !!req.body.done : cur.done;
+  const dueAt = req.body.dueAt !== undefined ? dateOrNull(req.body.dueAt) : cur.due_at;
+  const assigneeId = req.body.assigneeId !== undefined ? intOrNull(req.body.assigneeId) : cur.assignee_id;
+  const { rows } = await q('UPDATE tasks SET title=$1, done=$2, done_at=$3, due_at=$4, assignee_id=$5 WHERE id=$6 RETURNING *',
+    [title, done, done ? (cur.done ? cur.done_at : new Date()) : null, dueAt, assigneeId, req.params.id]);
+  res.json(taskOut(rows[0]));
+}));
+app.delete('/api/tasks/:id', requireAuth, wrap(async (req, res) => {
+  await q('DELETE FROM tasks WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+/* ---------- CSV import ---------- */
+async function findOrCreateCompany(name, extra, userId, cache) {
+  const key = name.toLowerCase();
+  if (cache.has(key)) return cache.get(key);
+  let row = (await q('SELECT id FROM companies WHERE lower(name)=$1 LIMIT 1', [key])).rows[0];
+  if (!row) {
+    row = (await q('INSERT INTO companies (name,domain,phone,vertical,size,city,state,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id',
+      [name, str(extra.domain), str(extra.phone), str(extra.vertical), str(extra.size), str(extra.city), str(extra.state), str(extra.notes), userId])).rows[0];
+    cache.set(key, { id: row.id, created: true });
+  } else cache.set(key, { id: row.id, created: false });
+  return cache.get(key);
+}
+
+app.post('/api/import/companies', requireAuth, wrap(async (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 5000) : [];
+  const cache = new Map(); let created = 0, skipped = 0;
+  for (const r of rows) {
+    const name = str(r.name); if (!name) { skipped++; continue; }
+    const c = await findOrCreateCompany(name, r, req.session.user.id, cache);
+    c.created ? created++ : skipped++;
+    c.created = false;
+  }
+  res.json({ created, skipped });
+}));
+
+app.post('/api/import/contacts', requireAuth, wrap(async (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows.slice(0, 5000) : [];
+  const createDeals = !!req.body.createDeals, stage = STAGES.includes(req.body.stage) ? req.body.stage : 'New lead';
+  const ownerId = intOrNull(req.body.ownerId) || req.session.user.id;
+  const cache = new Map(); let created = 0, skipped = 0, companies = 0, deals = 0;
+  const existingEmails = new Set((await q("SELECT lower(email) AS e FROM contacts WHERE email<>''")).rows.map(x => x.e));
+  for (const r of rows) {
+    const first = str(r.first), last = str(r.last), email = str(r.email).toLowerCase();
+    if (!first && !last && !email) { skipped++; continue; }
+    if (email && existingEmails.has(email)) { skipped++; continue; }
+    let companyId = null;
+    const coName = str(r.company);
+    if (coName) { const c = await findOrCreateCompany(coName, { vertical: r.vertical, domain: r.domainName }, req.session.user.id, cache); companyId = c.id; if (c.created) { companies++; c.created = false; } }
+    const ins = await q(
+      `INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,created_by,deal_migrated)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
+      [first, last, str(r.title), email, str(r.phone), companyId, str(r.vertical), str(r.source) || 'Import', str(r.notes), ownerId, req.session.user.id]);
+    if (email) existingEmails.add(email);
+    created++;
+    if (createDeals) {
+      await q(`INSERT INTO deals (name,contact_id,company_id,stage,value,vertical,source,owner_id,created_by,stage_history)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [coName || `${first} ${last}`.trim(), ins.rows[0].id, companyId, stage, num(r.value), str(r.vertical), str(r.source) || 'Import', ownerId, req.session.user.id,
+          JSON.stringify([{ stage, at: new Date().toISOString(), by: req.session.user.id }])]);
+      deals++;
+    }
+  }
+  res.json({ created, skipped, companies, deals });
+}));
+
+/* ---------- DocuSign ---------- */
+app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
+  res.json(await docusign.status());
+}));
+app.get('/api/docusign/templates', requireAuth, wrap(async (req, res) => {
+  res.json(await docusign.listTemplates());
+}));
+app.get('/api/docusign/templates/:id/roles', requireAuth, wrap(async (req, res) => {
+  res.json(await docusign.templateRoles(req.params.id));
+}));
+app.post('/api/deals/:id/envelopes', requireAuth, wrap(async (req, res) => {
+  const d = await dealById(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Deal not found' });
+  if (!SIGN_STAGES.includes(d.stage)) return res.status(400).json({ error: `Signatures can be sent at ${SIGN_STAGES.join(' or ')}` });
+  const templateId = str(req.body.templateId), roleName = str(req.body.roleName), signerName = str(req.body.signerName), signerEmail = str(req.body.signerEmail).toLowerCase();
+  if (!templateId || !roleName || !signerName || !signerEmail) return res.status(400).json({ error: 'Template, role, signer name and signer email are required' });
+  const extraRoles = Array.isArray(req.body.extraRoles) ? req.body.extraRoles.filter(r => str(r.roleName) && str(r.name) && str(r.email)) : [];
+  const env = await docusign.sendFromTemplate({
+    templateId, emailSubject: str(req.body.subject) || `27 Squared Marketing — ${d.name}`,
+    roles: [{ roleName, name: signerName, email: signerEmail }, ...extraRoles.map(r => ({ roleName: str(r.roleName), name: str(r.name), email: str(r.email).toLowerCase() }))],
+  });
+  const { rows } = await q(
+    `INSERT INTO envelopes (deal_id, envelope_id, template_id, template_name, signer_name, signer_email, status, sent_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [d.id, env.envelopeId, templateId, str(req.body.templateName), signerName, signerEmail, env.status || 'sent', req.session.user.id]);
+  await logActivity({ dealId: d.id, contactId: d.contact_id, userId: req.session.user.id, type: 'Proposal', text: `Sent "${str(req.body.templateName) || 'document'}" for signature to ${signerName} <${signerEmail}>` });
+  res.json(envelopeOut(rows[0]));
+}));
+app.post('/api/envelopes/:id/refresh', requireAuth, wrap(async (req, res) => {
+  const e = (await q('SELECT * FROM envelopes WHERE id=$1', [req.params.id])).rows[0];
+  if (!e) return res.status(404).json({ error: 'Envelope not found' });
+  const s = await docusign.envelopeStatus(e.envelope_id);
+  const updated = await applyEnvelopeStatus(e.envelope_id, s.status, s.completedDateTime);
+  res.json(envelopeOut(updated || e));
+}));
+app.post('/api/envelopes/:id/void', requireAuth, wrap(async (req, res) => {
+  const e = (await q('SELECT * FROM envelopes WHERE id=$1', [req.params.id])).rows[0];
+  if (!e) return res.status(404).json({ error: 'Envelope not found' });
+  await docusign.voidEnvelope(e.envelope_id, str(req.body.reason) || 'Voided from CRM');
+  const updated = await applyEnvelopeStatus(e.envelope_id, 'voided', null);
+  res.json(envelopeOut(updated || e));
+}));
+
+async function applyEnvelopeStatus(envelopeId, status, completedAt) {
+  status = String(status || '').toLowerCase();
+  if (!status) return null;
+  const cur = (await q('SELECT * FROM envelopes WHERE envelope_id=$1', [envelopeId])).rows[0];
+  if (!cur) return null;
+  if (cur.status === status) return cur;
+  const { rows } = await q('UPDATE envelopes SET status=$1, completed_at=$2, updated_at=now() WHERE envelope_id=$3 RETURNING *',
+    [status, status === 'completed' ? (completedAt ? new Date(completedAt) : new Date()) : cur.completed_at, envelopeId]);
+  const e = rows[0];
+  const d = await dealById(e.deal_id);
+  const label = { completed: 'signed by all parties', declined: 'declined', voided: 'voided', delivered: 'opened by the signer' }[status] || status;
+  await logActivity({ dealId: e.deal_id, contactId: d?.contact_id, type: 'Proposal', text: `DocuSign "${e.template_name || 'document'}" ${label}` });
+  if (['completed', 'declined', 'voided'].includes(status) && d) {
+    await notifyUser(d.owner_id, `${d.name}: document ${label}`, `<p>The DocuSign envelope <b>${esc(e.template_name || 'document')}</b> for <b>${esc(d.name)}</b> was <b>${label}</b> (${esc(e.signer_name)}).</p><p><a href="${dealLink(d.id)}">Open deal</a></p>`, null);
+    if (status === 'completed' && e.sent_by && String(e.sent_by) !== String(d.owner_id)) {
+      await notifyUser(e.sent_by, `${d.name}: document signed`, `<p>The DocuSign envelope <b>${esc(e.template_name || 'document')}</b> for <b>${esc(d.name)}</b> was signed by ${esc(e.signer_name)}.</p><p><a href="${dealLink(d.id)}">Open deal</a></p>`, null);
+    }
+  }
+  return e;
+}
+
+async function handleWebhook(req, res) {
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+  if (!docusign.verifyWebhook(req.headers, raw)) return res.status(401).send('bad signature');
+  let payload; try { payload = JSON.parse(raw.toString('utf8')); } catch { return res.status(400).send('bad json'); }
+  const data = payload.data || payload;
+  const envelopeId = data.envelopeId || data.envelopeSummary?.envelopeId;
+  const status = data.envelopeSummary?.status || payload.event?.replace('envelope-', '') || data.status;
+  const completedAt = data.envelopeSummary?.completedDateTime;
+  if (envelopeId && status) await applyEnvelopeStatus(envelopeId, status, completedAt);
+  res.json({ ok: true });
+}
 
 /* ---------- users (admin) ---------- */
 app.post('/api/users', requireAdmin, wrap(async (req, res) => {
   const email = str(req.body.email).toLowerCase(), name = str(req.body.name), password = String(req.body.password || ''), role = req.body.role === 'admin' ? 'admin' : 'member';
   if (!email || !name || password.length < 8) return res.status(400).json({ error: 'Name, email and a password of 8+ characters are required' });
-  const exists = await q('SELECT 1 FROM users WHERE email=$1', [email]);
-  if (exists.rows[0]) return res.status(409).json({ error: 'A user with that email already exists' });
+  if ((await q('SELECT 1 FROM users WHERE email=$1', [email])).rows[0]) return res.status(409).json({ error: 'A user with that email already exists' });
   const { rows } = await q('INSERT INTO users (email,name,password_hash,role) VALUES ($1,$2,$3,$4) RETURNING *', [email, name, await bcrypt.hash(password, 11), role]);
+  mailer.send({ to: email, subject: 'Your 27 Squared CRM login', html: `<p>${esc(req.session.user.name)} created a CRM account for you.</p><p>Sign in at <a href="${APP_URL}">${APP_URL}</a> with this email. They'll share your temporary password separately; change it from the sidebar after signing in.</p>` }).catch(() => {});
   res.json(publicUser(rows[0]));
 }));
 app.put('/api/users/:id', requireAdmin, wrap(async (req, res) => {
@@ -238,17 +501,47 @@ app.put('/api/users/:id', requireAdmin, wrap(async (req, res) => {
   res.json(publicUser(rows[0]));
 }));
 
+/* ---------- settings (admin) ---------- */
+app.get('/api/settings', requireAdmin, wrap(async (req, res) => {
+  res.json({ appUrl: APP_URL, email: mailer.describe(), docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook` });
+}));
+app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
+  await mailer.send({ to: req.session.user.email, subject: '27 Squared CRM — test email', html: '<p>Email notifications are working.</p>' });
+  res.json({ ok: true });
+}));
+
 /* ---------- backup ---------- */
 app.get('/api/export', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, activities] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM activities')]);
+  const [contacts, companies, deals, activities, tasks, envelopes] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes')]);
   res.setHeader('Content-Disposition', `attachment; filename="27sq-crm-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, activities: activities.rows });
+  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows });
 }));
+
+/* ---------- daily task digest (8:00 America/New_York) ---------- */
+async function dailyDigestTick() {
+  if (!mailer.configured()) return;
+  const now = new Date();
+  const et = new Intl.DateTimeFormat('en-US', { timeZone: process.env.DIGEST_TZ || 'America/New_York', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit' }).formatToParts(now).reduce((a, p) => (a[p.type] = p.value, a), {});
+  if (Number(et.hour) !== Number(process.env.DIGEST_HOUR || 8)) return;
+  const today = `${et.year}-${et.month}-${et.day}`;
+  const last = (await q("SELECT value FROM meta WHERE key='digest_sent'")).rows[0]?.value;
+  if (last === today) return;
+  await q("INSERT INTO meta (key,value) VALUES ('digest_sent',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [today]);
+  const users = (await q('SELECT * FROM users WHERE active')).rows;
+  for (const u of users) {
+    const { rows } = await q(`SELECT t.*, d.name AS deal_name FROM tasks t LEFT JOIN deals d ON d.id=t.deal_id WHERE t.assignee_id=$1 AND t.done=FALSE AND t.due_at IS NOT NULL AND t.due_at <= $2 ORDER BY t.due_at`, [u.id, today]);
+    if (!rows.length) continue;
+    const overdue = rows.filter(t => String(t.due_at).slice(0, 10) < today), due = rows.filter(t => String(t.due_at).slice(0, 10) === today);
+    const li = t => `<li><b>${esc(t.title)}</b>${t.deal_name ? ` — ${esc(t.deal_name)}` : ''} <span style="color:#636466">(${String(t.due_at).slice(0, 10)})</span></li>`;
+    const html = `${overdue.length ? `<p><b>Overdue (${overdue.length})</b></p><ul>${overdue.map(li).join('')}</ul>` : ''}${due.length ? `<p><b>Due today (${due.length})</b></p><ul>${due.map(li).join('')}</ul>` : ''}<p><a href="${APP_URL}/#tasks">Open tasks</a></p>`;
+    mailer.send({ to: u.email, subject: `Tasks for today: ${due.length} due${overdue.length ? `, ${overdue.length} overdue` : ''}`, html }).catch(e => console.error('Digest failed:', e.message));
+  }
+}
 
 /* ---------- static + errors ---------- */
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Something went wrong on the server' }); });
+app.use((err, req, res, next) => { if (!err.expose) console.error(err); res.status(err.status || 500).json({ error: err.expose ? err.message : (err.publicMessage || 'Something went wrong on the server') }); });
 
 /* ---------- boot ---------- */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -267,5 +560,6 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
 (async () => {
   await waitForDb();
   await q(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
-  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT}`));
+  app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}`));
+  setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);
 })().catch(e => { console.error('Boot failed:', e); process.exit(1); });

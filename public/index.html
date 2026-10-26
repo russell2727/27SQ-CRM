@@ -10,7 +10,7 @@
 :root{
   --magenta:#EC008C; --black:#000000; --grey:#636466;
   --bg:#FFFFFF; --panel:#F6F6F7; --line:#E2E2E5; --ink:#000000; --ink2:#636466; --ink3:#9C9DA1;
-  --won:#1F9D55; --lost:#B42318;
+  --won:#1F9D55; --lost:#B42318; --warn:#B45309;
   --hd:'Archivo',Arial,sans-serif; --body:'Hanken Grotesk',Helvetica,Arial,sans-serif;
   color-scheme:light;
 }
@@ -40,6 +40,8 @@ h1{font-size:22px} h2{font-size:17px} h3{font-size:13px;color:var(--ink2)}
 .nav button[aria-current]{background:var(--black);color:#fff}
 @media (prefers-color-scheme:dark){.nav button[aria-current]{background:#fff;color:#000}}
 .nav button .n{font-size:12px;opacity:.6}
+.nav button .n.due{opacity:1;color:var(--magenta);font-weight:600}
+.nav button[aria-current] .n.due{color:inherit}
 .rail .foot{margin-top:auto;display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--ink2)}
 .rail .foot .who{color:var(--ink);font-weight:500;font-size:13px}
 .rail .foot button{all:unset;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
@@ -59,9 +61,11 @@ main{padding:22px 26px 60px;min-width:0}
 .btn[disabled]{opacity:.5;cursor:default}
 .btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,.nav button:focus-visible,.card:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
 input,select,textarea{width:100%;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:8px 10px}
+input[type=checkbox]{width:auto;padding:0;margin:0 6px 0 0;vertical-align:-2px;accent-color:var(--magenta)}
 textarea{min-height:80px;resize:vertical}
 .search{max-width:300px}
 label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px;font-weight:500}
+label.inline{display:flex;align-items:center;font-size:14px;color:var(--ink);cursor:pointer}
 .field{margin-bottom:12px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -69,6 +73,10 @@ label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px;font-weig
 .seg button{all:unset;cursor:pointer;padding:6px 12px;font-size:13px}
 .seg button[aria-pressed="true"]{background:var(--black);color:#fff}
 @media (prefers-color-scheme:dark){.seg button[aria-pressed="true"]{background:#fff;color:#000}}
+.note{font-size:13px;color:var(--ink2)}
+.warnbox{border:1px solid var(--warn);color:var(--warn);border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:12px}
+.okbox{border:1px solid var(--won);color:var(--won);border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:12px}
+code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:13px;word-break:break-all}
 
 .board{display:grid;grid-template-columns:repeat(5,minmax(220px,1fr));gap:12px;overflow-x:auto;padding-bottom:8px}
 .col{background:var(--panel);border-radius:8px;padding:10px;min-height:300px;display:flex;flex-direction:column;gap:8px}
@@ -81,8 +89,10 @@ label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px;font-weig
 .card.dragging{opacity:.4}
 .card .nm{font-weight:600}
 .card .co{font-size:13px;color:var(--ink2)}
-.card .meta{display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-top:6px}
+.card .meta{display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-top:6px;gap:6px}
 .card .val{color:var(--ink);font-weight:500}
+.card .sig{color:var(--magenta)}
+.card .sig.done{color:var(--won)}
 .empty{color:var(--ink3);font-size:13px;padding:12px 4px;text-align:center}
 
 table{width:100%;border-collapse:collapse}
@@ -90,11 +100,11 @@ th{text-align:left;font-size:12px;color:var(--ink2);font-weight:500;padding:8px 
 td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
 tr.rowlink{cursor:pointer}
 tr.rowlink:hover td{background:var(--panel)}
-.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--panel);color:var(--ink2);border:1px solid var(--line)}
+.tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--panel);color:var(--ink2);border:1px solid var(--line);white-space:nowrap}
 .tag.won{color:var(--won);border-color:var(--won)}
 .tag.lost{color:var(--lost);border-color:var(--lost)}
 .tag.stage{color:var(--ink)}
-.tag.admin{color:var(--magenta);border-color:var(--magenta)}
+.tag.admin,.tag.m{color:var(--magenta);border-color:var(--magenta)}
 .muted{color:var(--ink2)}
 .bigempty{padding:60px 20px;text-align:center;color:var(--ink2);border:1px dashed var(--line);border-radius:8px}
 .bigempty p{margin:0 0 12px}
@@ -109,7 +119,7 @@ tr.rowlink:hover td{background:var(--panel)}
 .panel{min-width:0}
 .panel h3{margin-bottom:10px}
 .bars{display:flex;flex-direction:column;gap:7px}
-.bar{display:grid;grid-template-columns:150px 1fr 60px;align-items:center;gap:10px;font-size:13px}
+.bar{display:grid;grid-template-columns:150px 1fr 70px;align-items:center;gap:10px;font-size:13px}
 .bar .track{height:10px;background:var(--panel);border-radius:2px;overflow:hidden}
 .bar .fill{height:100%;background:var(--black)}
 .bar .fill.m{background:var(--magenta)}
@@ -121,17 +131,28 @@ tr.rowlink:hover td{background:var(--panel)}
 @media (prefers-color-scheme:dark){.fstep .f{background:#fff}}
 .fstep .pct{text-align:right;color:var(--ink2)}
 
+.tasklist .task{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:start;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+.tasklist .task.done .t{text-decoration:line-through;color:var(--ink3)}
+.tasklist .task .sub{font-size:12px;color:var(--ink2);margin-top:2px}
+.tasklist .task .sub a{cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.tasklist .due.over{color:var(--lost);font-weight:600}
+.tasklist .due.today{color:var(--magenta);font-weight:600}
+.tasklist h3{margin:18px 0 6px}
+.tasklist .task .x{all:unset;cursor:pointer;color:var(--ink3);padding:0 4px}
+.tasklist .task .x:hover{color:var(--lost)}
+
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;z-index:20}
 .scrim.open{display:block}
-.drawer{position:fixed;top:0;right:0;height:100vh;width:min(560px,100vw);background:var(--bg);border-left:1px solid var(--line);z-index:21;transform:translateX(100%);transition:transform .22s ease;overflow-y:auto;padding:22px 24px 40px}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:min(600px,100vw);background:var(--bg);border-left:1px solid var(--line);z-index:21;transform:translateX(100%);transition:transform .22s ease;overflow-y:auto;padding:22px 24px 40px}
 .drawer.open{transform:none}
 @media (prefers-reduced-motion:reduce){.drawer{transition:none}}
 .drawer .dh{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:16px}
 .drawer .dh h2{font-size:19px;text-transform:none;font-family:var(--body);font-weight:600}
 .drawer .sub{color:var(--ink2);font-size:13px}
+.drawer .sub a{cursor:pointer}
 .section{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
-.section h3{margin-bottom:10px}
-.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:14px}
+.section h3{margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:14px}
 .kv .k{color:var(--ink2)}
 .stages{display:flex;gap:4px;margin:8px 0 4px}
 .stages button{all:unset;cursor:pointer;flex:1;text-align:center;font-size:11px;padding:7px 4px;background:var(--panel);border-radius:4px;color:var(--ink2)}
@@ -141,18 +162,21 @@ tr.rowlink:hover td{background:var(--panel)}
 .act .t{color:var(--ink3);font-size:12px;white-space:nowrap;min-width:72px}
 .act .tp{font-weight:600;margin-right:6px}
 .act .by{color:var(--ink3);font-size:12px;margin-left:6px}
+.env{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
+.env .s{font-size:12px;color:var(--ink2)}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--black);color:#fff;padding:9px 16px;border-radius:6px;font-size:14px;z-index:30;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw}
 .toast.show{opacity:1}
 .toast.err{background:var(--lost)}
 @media (prefers-color-scheme:dark){.toast{background:#fff;color:#000}.toast.err{background:var(--lost);color:#fff}}
 .hide{display:none!important}
+.maptable td,.maptable th{padding:6px 8px;font-size:13px}
+.maptable select{padding:4px 6px;font-size:13px}
+.preview{font-size:12px;color:var(--ink2);max-width:100%;overflow:auto;white-space:nowrap}
 
-/* auth */
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
-.authbox{width:min(400px,100%);}
+.authbox{width:min(400px,100%)}
 .authbox .brand{margin-bottom:28px}
 .authbox h1{font-size:20px;margin-bottom:18px}
-.authbox .note{font-size:13px;color:var(--ink2);margin-top:14px}
 .err{color:var(--lost);font-size:13px;margin:-4px 0 10px;min-height:1em}
 
 @media (max-width:820px){
@@ -168,6 +192,7 @@ tr.rowlink:hover td{background:var(--panel)}
   .panels{grid-template-columns:1fr}
   .grid2{grid-template-columns:1fr}
   .bar,.fstep{grid-template-columns:110px 1fr 56px}
+  .kv{grid-template-columns:100px 1fr}
 }
 </style>
 </head>
@@ -180,28 +205,43 @@ tr.rowlink:hover td{background:var(--panel)}
 <script>
 /* ---------- constants ---------- */
 let STAGES = ['New lead','Contacted','Qualified','Proposal sent','Closed won'];
+let SIGN_STAGES = ['Proposal sent','Closed won'];
 const VERTICALS = ['Debt consolidation','Personal lending','Mortgage','Automotive','Powersports','RV / Marine','eCommerce','Other'];
-const SOURCES = ['Website','Referral','Outbound','Partner','Event','Inbound email','Other'];
+const SOURCES = ['Website','Referral','Outbound','Partner','Event','Inbound email','Import','Other'];
 const SIZES = ['1–10','11–50','51–200','201–500','501–1,000','1,000+'];
 const ACT_TYPES = ['Note','Call','Email','Meeting','Proposal'];
 
 /* ---------- state ---------- */
 let me = null;
-let db = { contacts: [], companies: [], users: [] };
+let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[] };
+let integrations = { docusign:false, email:false };
 let view = 'pipeline';
 let search = '';
 let mineOnly = false;
+let taskFilter = 'mine';
 
+const today = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const fmtMoney = n => '$' + (Number(n)||0).toLocaleString('en-US',{maximumFractionDigits:0});
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+const fmtDay = ymd => ymd ? new Date(ymd+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const byId = (arr,id) => arr.find(x=>String(x.id)===String(id));
 const companyName = id => (byId(db.companies,id)||{}).name || '';
 const userName = id => (byId(db.users,id)||{}).name || '';
-const fullName = c => [c.first,c.last].filter(Boolean).join(' ') || '(no name)';
+const fullName = c => c ? ([c.first,c.last].filter(Boolean).join(' ') || '(no name)') : '';
+const contactName = id => fullName(byId(db.contacts,id));
 const opts = (arr, cur) => arr.map(o=>`<option ${o===cur?'selected':''}>${esc(o)}</option>`).join('');
 const companyOpts = cur => `<option value="">— none —</option>` + db.companies.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(co=>`<option value="${co.id}" ${String(co.id)===String(cur)?'selected':''}>${esc(co.name)}</option>`).join('');
+const contactOpts = (cur, companyId) => `<option value="">— none —</option>` + db.contacts.filter(c=>!companyId || String(c.companyId)===String(companyId) || String(c.id)===String(cur)).slice().sort((a,b)=>fullName(a).localeCompare(fullName(b))).map(c=>`<option value="${c.id}" ${String(c.id)===String(cur)?'selected':''}>${esc(fullName(c))}${c.companyId?` — ${esc(companyName(c.companyId))}`:''}</option>`).join('');
 const ownerOpts = cur => db.users.filter(u=>u.active).map(u=>`<option value="${u.id}" ${String(u.id)===String(cur)?'selected':''}>${esc(u.name)}</option>`).join('');
+const dealOpen = d => !d.lost && d.stage!=='Closed won';
+const dealsOf = {
+  contact: id => db.deals.filter(d=>String(d.contactId)===String(id)),
+  company: id => db.deals.filter(d=>String(d.companyId)===String(id)),
+};
+const sum = arr => arr.reduce((a,d)=>a+(Number(d.value)||0),0);
+const envsOf = dealId => db.envelopes.filter(e=>String(e.dealId)===String(dealId));
+const tasksOf = (key,id) => db.tasks.filter(t=>String(t[key])===String(id));
 
 /* ---------- api ---------- */
 async function api(path, opts={}){
@@ -213,7 +253,8 @@ async function api(path, opts={}){
 }
 async function refresh(){
   const d = await api('/api/bootstrap');
-  me = d.user; db = { contacts:d.contacts, companies:d.companies, users:d.users }; STAGES = d.stages;
+  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users };
+  STAGES = d.stages; SIGN_STAGES = d.signStages; integrations = d.integrations;
   render();
 }
 const tryApi = async (fn) => { try{ return await fn(); } catch(e){ toast(e.message, true); throw e; } };
@@ -222,15 +263,16 @@ const tryApi = async (fn) => { try{ return await fn(); } catch(e){ toast(e.messa
 let toastTimer;
 function toast(msg, isErr){
   const t = document.getElementById('toast'); t.textContent = msg; t.classList.toggle('err', !!isErr); t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), isErr?3200:1800);
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), isErr?4500:1800);
 }
 
 /* ---------- auth screens ---------- */
 const brandHtml = `<div class="brand"><div class="bug" aria-hidden="true"><span>2</span><span>7</span><span>S</span><span>Q</span></div><b>27 Squared<small>Data Centric Consumer Engagement</small></b></div>`;
+const v = sel => (document.querySelector(sel)||{value:''}).value.trim();
 
 async function renderAuth(){
   const s = await api('/api/auth/status');
-  if(s.user){ await refresh(); return; }
+  if(s.user){ await refresh(); routeFromHash(); return; }
   const root = document.getElementById('root');
   if(s.needsSetup){
     root.innerHTML = `<div class="auth"><div class="authbox">${brandHtml}<h1>Create the admin account</h1>
@@ -239,7 +281,7 @@ async function renderAuth(){
       <div class="field"><label>Password (8+ characters)</label><input id="s-pass" type="password" autocomplete="new-password"></div>
       <div class="err" id="s-err"></div>
       <button class="btn primary" id="s-go">Create account</button>
-      <div class="note">This runs once. You'll add teammates from the Team page afterward.</div></div></div>`;
+      <div class="note" style="margin-top:14px">This runs once. You'll add teammates from the Team page afterward.</div></div></div>`;
     const go = async ()=>{ try{ await api('/api/auth/setup',{method:'POST',body:{name:v('#s-name'),email:v('#s-email'),password:v('#s-pass')}}); await refresh(); } catch(e){ document.getElementById('s-err').textContent=e.message; } };
     document.getElementById('s-go').onclick = go;
     root.querySelectorAll('input').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') go(); });
@@ -249,13 +291,24 @@ async function renderAuth(){
       <div class="field"><label>Password</label><input id="l-pass" type="password" autocomplete="current-password"></div>
       <div class="err" id="l-err"></div>
       <button class="btn primary" id="l-go">Sign in</button></div></div>`;
-    const go = async ()=>{ try{ await api('/api/auth/login',{method:'POST',body:{email:v('#l-email'),password:v('#l-pass')}}); await refresh(); } catch(e){ document.getElementById('l-err').textContent=e.message; } };
+    const go = async ()=>{ try{ await api('/api/auth/login',{method:'POST',body:{email:v('#l-email'),password:v('#l-pass')}}); await refresh(); routeFromHash(); } catch(e){ document.getElementById('l-err').textContent=e.message; } };
     document.getElementById('l-go').onclick = go;
     root.querySelectorAll('input').forEach(i=>i.onkeydown=e=>{ if(e.key==='Enter') go(); });
     document.getElementById('l-email').focus();
   }
 }
-const v = sel => (document.querySelector(sel)||{value:''}).value.trim();
+
+/* ---------- hash routing (email deep links) ---------- */
+function routeFromHash(){
+  const h = location.hash.replace(/^#/,'');
+  if(!h) return;
+  const [kind, id] = h.split('/');
+  if(['pipeline','contacts','companies','tasks','analytics','team','settings'].includes(kind)){ view=kind; render(); }
+  else if(kind==='deal' && id){ view='pipeline'; render(); openDetail('deal', id); }
+  else if(kind==='contact' && id){ view='contacts'; render(); openDetail('contact', id); }
+  history.replaceState(null,'',location.pathname);
+}
+window.addEventListener('hashchange', ()=>{ if(me) routeFromHash(); });
 
 /* ---------- shell ---------- */
 function render(){
@@ -266,8 +319,9 @@ function render(){
         <button data-view="pipeline">Pipeline <span class="n" id="n-pipe"></span></button>
         <button data-view="contacts">Contacts <span class="n" id="n-contacts"></span></button>
         <button data-view="companies">Companies <span class="n" id="n-companies"></span></button>
+        <button data-view="tasks">Tasks <span class="n" id="n-tasks"></span></button>
         <button data-view="analytics">Analytics</button>
-        ${me.role==='admin'?`<button data-view="team">Team <span class="n" id="n-team"></span></button>`:''}
+        ${me.role==='admin'?`<button data-view="team">Team <span class="n" id="n-team"></span></button><button data-view="settings">Settings</button>`:''}
       </nav>
       <div class="foot"><span class="who" id="who"></span><button id="pw">Change password</button><button id="export">Export backup (JSON)</button><button id="logout">Sign out</button></div>
     </aside><main id="main"></main></div>`;
@@ -278,130 +332,211 @@ function render(){
   }
   [...document.querySelectorAll('#nav button')].forEach(x=>x.toggleAttribute('aria-current', x.dataset.view===view));
   document.getElementById('who').textContent = me.name;
-  document.getElementById('n-pipe').textContent = db.contacts.filter(c=>!c.lost && c.stage!=='Closed won').length;
+  document.getElementById('n-pipe').textContent = db.deals.filter(dealOpen).length;
   document.getElementById('n-contacts').textContent = db.contacts.length;
   document.getElementById('n-companies').textContent = db.companies.length;
-  const nt = document.getElementById('n-team'); if(nt) nt.textContent = db.users.filter(u=>u.active).length;
+  const due = db.tasks.filter(t=>!t.done && String(t.assigneeId)===String(me.id) && t.dueAt && t.dueAt<=today()).length;
+  const nt = document.getElementById('n-tasks'); nt.textContent = due || db.tasks.filter(t=>!t.done && String(t.assigneeId)===String(me.id)).length; nt.classList.toggle('due', due>0);
+  const nteam = document.getElementById('n-team'); if(nteam) nteam.textContent = db.users.filter(u=>u.active).length;
 
   const m = document.getElementById('main');
-  m.innerHTML = view==='pipeline' ? renderPipeline() : view==='contacts' ? renderContacts() : view==='companies' ? renderCompanies() : view==='team' ? renderTeam() : renderAnalytics();
+  m.innerHTML = ({pipeline:renderPipeline, contacts:renderContacts, companies:renderCompanies, tasks:renderTasks, analytics:renderAnalytics, team:renderTeam, settings:renderSettings})[view]();
   bindMain();
 }
 
-/* ---------- pipeline ---------- */
+/* ---------- pipeline (deals) ---------- */
+function sigBadge(d){
+  const envs = envsOf(d.id); if(!envs.length) return '';
+  const latest = envs[0];
+  if(latest.status==='completed') return `<span class="sig done">Signed</span>`;
+  if(['declined','voided'].includes(latest.status)) return `<span class="sig" style="color:var(--lost)">${latest.status}</span>`;
+  return `<span class="sig">Awaiting signature</span>`;
+}
 function renderPipeline(){
-  const visible = db.contacts.filter(c=>!mineOnly || String(c.ownerId)===String(me.id));
+  const visible = db.deals.filter(d=>!mineOnly || String(d.ownerId)===String(me.id));
   const cols = STAGES.map(s=>{
-    const cards = visible.filter(c=>c.stage===s && !c.lost);
-    const sum = cards.reduce((a,c)=>a+(Number(c.value)||0),0);
+    const cards = visible.filter(d=>d.stage===s && !d.lost);
     return `<section class="col" data-stage="${esc(s)}">
-      <div class="colhead"><h3>${esc(s)}</h3><span class="sum">${cards.length} · ${fmtMoney(sum)}</span></div>
-      ${cards.length ? cards.map(c=>`<article class="card" draggable="true" tabindex="0" data-id="${c.id}">
-        <div class="nm">${esc(fullName(c))}</div>
-        <div class="co">${esc(companyName(c.companyId) || c.title || '')}</div>
-        <div class="meta"><span>${esc(userName(c.ownerId)||c.vertical||'')}</span><span class="val">${c.value?fmtMoney(c.value):''}</span></div>
-      </article>`).join('') : `<div class="empty">Drop a lead here</div>`}
+      <div class="colhead"><h3>${esc(s)}</h3><span class="sum">${cards.length} · ${fmtMoney(sum(cards))}</span></div>
+      ${cards.length ? cards.map(d=>`<article class="card" draggable="true" tabindex="0" data-id="${d.id}">
+        <div class="nm">${esc(d.name)}</div>
+        <div class="co">${esc([contactName(d.contactId), companyName(d.companyId)].filter(Boolean).join(' · '))}</div>
+        <div class="meta"><span>${esc(userName(d.ownerId)||d.vertical||'')}</span>${sigBadge(d)}<span class="val">${d.value?fmtMoney(d.value):''}</span></div>
+      </article>`).join('') : `<div class="empty">Drop a deal here</div>`}
     </section>`;
   }).join('');
   return `<div class="top"><h1>Pipeline</h1><div class="actions">
       <div class="seg"><button aria-pressed="${!mineOnly}" data-mine="0">All</button><button aria-pressed="${mineOnly}" data-mine="1">Mine</button></div>
-      <button class="btn primary" data-new="contact">Add lead</button></div></div>
-    ${db.contacts.length ? `<div class="board">${cols}</div>` : `<div class="bigempty"><p>No leads yet. Add your first one and it lands in New lead.</p><button class="btn primary" data-new="contact">Add lead</button></div>`}`;
+      <button class="btn primary" data-new="deal">Add deal</button></div></div>
+    ${db.deals.length ? `<div class="board">${cols}</div>` : `<div class="bigempty"><p>No deals yet. Add one, or add a contact and tick "also create a deal".</p><button class="btn primary" data-new="deal">Add deal</button></div>`}`;
+}
+function stageTag(d){
+  if(d.lost) return `<span class="tag lost">Lost</span>`;
+  if(d.stage==='Closed won') return `<span class="tag won">Closed won</span>`;
+  return `<span class="tag stage">${esc(d.stage)}</span>`;
+}
+function contactStatus(c){
+  const ds = dealsOf.contact(c.id);
+  if(!ds.length) return `<span class="tag">No deal</span>`;
+  const open = ds.filter(dealOpen);
+  if(open.length) return open.length===1 ? stageTag(open[0]) : `<span class="tag stage">${open.length} open deals</span>`;
+  if(ds.some(d=>!d.lost && d.stage==='Closed won')) return `<span class="tag won">Won</span>`;
+  return `<span class="tag lost">Lost</span>`;
 }
 
 /* ---------- contacts ---------- */
 function renderContacts(){
   const q = search.toLowerCase();
   const rows = db.contacts.filter(c=>!q || [fullName(c),c.email,c.title,companyName(c.companyId),c.vertical,userName(c.ownerId)].join(' ').toLowerCase().includes(q));
-  return `<div class="top"><h1>Contacts</h1><div class="actions"><input class="search" id="search" placeholder="Search name, email, company" value="${esc(search)}"><button class="btn primary" data-new="contact">Add contact</button></div></div>
-  ${db.contacts.length ? `<table><thead><tr><th>Name</th><th>Company</th><th>Stage</th><th>Owner</th><th>Vertical</th><th>Value</th><th>Added</th></tr></thead><tbody>
+  return `<div class="top"><h1>Contacts</h1><div class="actions"><input class="search" id="search" placeholder="Search name, email, company" value="${esc(search)}"><button class="btn" data-import="contacts">Import CSV</button><button class="btn primary" data-new="contact">Add contact</button></div></div>
+  ${db.contacts.length ? `<table><thead><tr><th>Name</th><th>Company</th><th>Deals</th><th>Owner</th><th>Vertical</th><th>Added</th></tr></thead><tbody>
     ${rows.map(c=>`<tr class="rowlink" data-open="contact" data-id="${c.id}">
       <td><strong>${esc(fullName(c))}</strong><div class="muted" style="font-size:13px">${esc(c.title||'')}${c.title&&c.email?' · ':''}${esc(c.email||'')}</div></td>
-      <td>${esc(companyName(c.companyId))}</td><td>${stageTag(c)}</td><td>${esc(userName(c.ownerId))}</td><td>${esc(c.vertical||'')}</td>
-      <td>${c.value?fmtMoney(c.value):''}</td><td class="muted">${fmtDate(c.createdAt)}</td></tr>`).join('') || `<tr><td colspan="7" class="empty">Nothing matches that search</td></tr>`}
-  </tbody></table>` : `<div class="bigempty"><p>No contacts yet.</p><button class="btn primary" data-new="contact">Add contact</button></div>`}`;
-}
-function stageTag(c){
-  if(c.lost) return `<span class="tag lost">Lost</span>`;
-  if(c.stage==='Closed won') return `<span class="tag won">Closed won</span>`;
-  return `<span class="tag stage">${esc(c.stage)}</span>`;
+      <td>${esc(companyName(c.companyId))}</td><td>${contactStatus(c)}</td><td>${esc(userName(c.ownerId))}</td><td>${esc(c.vertical||'')}</td>
+      <td class="muted">${fmtDate(c.createdAt)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">Nothing matches that search</td></tr>`}
+  </tbody></table>` : `<div class="bigempty"><p>No contacts yet.</p><div class="row" style="justify-content:center"><button class="btn primary" data-new="contact">Add contact</button><button class="btn" data-import="contacts">Import CSV</button></div></div>`}`;
 }
 
 /* ---------- companies ---------- */
 function renderCompanies(){
   const q = search.toLowerCase();
   const rows = db.companies.filter(co=>!q || [co.name,co.domain,co.vertical].join(' ').toLowerCase().includes(q)).sort((a,b)=>a.name.localeCompare(b.name));
-  return `<div class="top"><h1>Companies</h1><div class="actions"><input class="search" id="search" placeholder="Search companies" value="${esc(search)}"><button class="btn primary" data-new="company">Add company</button></div></div>
+  return `<div class="top"><h1>Companies</h1><div class="actions"><input class="search" id="search" placeholder="Search companies" value="${esc(search)}"><button class="btn" data-import="companies">Import CSV</button><button class="btn primary" data-new="company">Add company</button></div></div>
   ${db.companies.length ? `<table><thead><tr><th>Company</th><th>Vertical</th><th>Size</th><th>Contacts</th><th>Open pipeline</th><th>Won</th></tr></thead><tbody>
     ${rows.map(co=>{
-      const cs = db.contacts.filter(c=>String(c.companyId)===String(co.id));
-      const open = cs.filter(c=>!c.lost && c.stage!=='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
-      const won = cs.filter(c=>!c.lost && c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
+      const cs = db.contacts.filter(c=>String(c.companyId)===String(co.id)), ds = dealsOf.company(co.id);
+      const open = sum(ds.filter(dealOpen)), won = sum(ds.filter(d=>!d.lost && d.stage==='Closed won'));
       return `<tr class="rowlink" data-open="company" data-id="${co.id}">
         <td><strong>${esc(co.name)}</strong><div class="muted" style="font-size:13px">${esc(co.domain||'')}</div></td>
         <td>${esc(co.vertical||'')}</td><td>${esc(co.size||'')}</td><td>${cs.length}</td><td>${open?fmtMoney(open):''}</td><td>${won?fmtMoney(won):''}</td></tr>`;}).join('') || `<tr><td colspan="6" class="empty">Nothing matches that search</td></tr>`}
-  </tbody></table>` : `<div class="bigempty"><p>No companies yet. Companies group your contacts and roll up their deal value.</p><button class="btn primary" data-new="company">Add company</button></div>`}`;
+  </tbody></table>` : `<div class="bigempty"><p>No companies yet. Companies group your contacts and roll up deal value.</p><div class="row" style="justify-content:center"><button class="btn primary" data-new="company">Add company</button><button class="btn" data-import="companies">Import CSV</button></div></div>`}`;
+}
+
+/* ---------- tasks ---------- */
+function taskRow(t, showLinks=true){
+  const d = t.dealId ? byId(db.deals,t.dealId) : null, c = t.contactId ? byId(db.contacts,t.contactId) : null;
+  const dueCls = !t.done && t.dueAt ? (t.dueAt<today()?'over':t.dueAt===today()?'today':'') : '';
+  return `<div class="task ${t.done?'done':''}" data-task="${t.id}">
+    <input type="checkbox" ${t.done?'checked':''} data-done="${t.id}" aria-label="Done">
+    <div><div class="t">${esc(t.title)}</div>
+      <div class="sub">${t.dueAt?`<span class="due ${dueCls}">${t.dueAt<today()&&!t.done?'Overdue · ':''}${fmtDay(t.dueAt)}</span> · `:''}${esc(userName(t.assigneeId)||'Unassigned')}${showLinks&&d?` · <a data-open-deal="${d.id}">${esc(d.name)}</a>`:''}${showLinks&&c&&!d?` · <a data-open-contact="${c.id}">${esc(fullName(c))}</a>`:''}</div></div>
+    <button class="x" data-del-task="${t.id}" title="Delete">✕</button>
+  </div>`;
+}
+function renderTasks(){
+  const mine = taskFilter==='mine';
+  const all = db.tasks.filter(t=>!mine || String(t.assigneeId)===String(me.id));
+  const open = all.filter(t=>!t.done), done = all.filter(t=>t.done).slice(0,30);
+  const groups = [
+    ['Overdue', open.filter(t=>t.dueAt && t.dueAt<today())],
+    ['Today', open.filter(t=>t.dueAt===today())],
+    ['Upcoming', open.filter(t=>t.dueAt && t.dueAt>today()).sort((a,b)=>a.dueAt.localeCompare(b.dueAt))],
+    ['No date', open.filter(t=>!t.dueAt)],
+  ].filter(g=>g[1].length);
+  return `<div class="top"><h1>Tasks</h1><div class="actions">
+    <div class="seg"><button aria-pressed="${mine}" data-tf="mine">Mine</button><button aria-pressed="${!mine}" data-tf="all">Everyone</button></div>
+    <button class="btn primary" data-new="task">Add task</button></div></div>
+  <div class="tasklist">
+    ${groups.length ? groups.map(([h,ts])=>`<h3>${h} (${ts.length})</h3>${ts.map(t=>taskRow(t)).join('')}`).join('') : `<div class="bigempty"><p>Nothing open${mine?' for you':''}.</p><button class="btn primary" data-new="task">Add task</button></div>`}
+    ${done.length?`<h3>Done recently</h3>${done.map(t=>taskRow(t)).join('')}`:''}
+  </div>`;
 }
 
 /* ---------- team (admin) ---------- */
 function renderTeam(){
   return `<div class="top"><h1>Team</h1><div class="actions"><button class="btn primary" data-new="user">Add user</button></div></div>
-  <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Open leads</th><th>Won</th></tr></thead><tbody>
+  <table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Open deals</th><th>Won</th></tr></thead><tbody>
   ${db.users.map(u=>{
-    const mine = db.contacts.filter(c=>String(c.ownerId)===String(u.id));
+    const mine = db.deals.filter(d=>String(d.ownerId)===String(u.id));
     return `<tr class="rowlink" data-open="user" data-id="${u.id}"><td><strong>${esc(u.name)}</strong>${String(u.id)===String(me.id)?' <span class="muted">(you)</span>':''}</td><td>${esc(u.email)}</td>
     <td>${u.role==='admin'?'<span class="tag admin">Admin</span>':'<span class="tag">Member</span>'}</td><td>${u.active?'Active':'<span class="tag lost">Deactivated</span>'}</td>
-    <td>${mine.filter(c=>!c.lost&&c.stage!=='Closed won').length}</td><td>${fmtMoney(mine.filter(c=>!c.lost&&c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0))}</td></tr>`;}).join('')}
+    <td>${mine.filter(dealOpen).length}</td><td>${fmtMoney(sum(mine.filter(d=>!d.lost&&d.stage==='Closed won')))}</td></tr>`;}).join('')}
   </tbody></table>`;
+}
+
+/* ---------- settings (admin) ---------- */
+function renderSettings(){
+  setTimeout(loadSettings, 0);
+  return `<div class="top"><h1>Settings</h1></div><div id="settings" class="muted">Loading…</div>`;
+}
+async function loadSettings(){
+  const el = document.getElementById('settings'); if(!el) return;
+  try{
+    const s = await api('/api/settings');
+    const ds = s.docusign;
+    el.innerHTML = `
+    <div class="panels">
+      <div class="panel"><h3>Email notifications</h3>
+        ${s.email.configured ? `<div class="okbox">Sending as ${esc(s.email.from)} via ${esc(s.email.host)}</div><button class="btn sm" id="test-mail">Send me a test email</button>`
+        : `<div class="warnbox">Not configured. Notifications are logged but not sent.</div>
+           <p class="note">Add these environment variables on the hosting service and redeploy:</p>
+           <p class="note"><code>SMTP_HOST</code> <code>SMTP_PORT</code> <code>SMTP_USER</code> <code>SMTP_PASS</code> <code>MAIL_FROM</code> — or a single <code>SMTP_URL</code> (smtps://user:pass@host:465).</p>
+           <p class="note">Any transactional provider works (Google Workspace SMTP, SendGrid, Postmark, Resend, Amazon SES).</p>`}
+        <p class="note" style="margin-top:14px">Sends: deal assigned to you · stage change on a deal you own · task assigned to you · DocuSign signed/declined/voided · 8:00 ET daily digest of tasks due.</p>
+      </div>
+      <div class="panel"><h3>DocuSign</h3>
+        ${ds.ok ? `<div class="okbox">Connected (${esc(ds.env)}). Templates load from your account when you send for signature.</div>`
+        : ds.configured ? `<div class="warnbox">Configured but not working: ${esc(ds.error)}</div>${ds.consentUrl?`<p class="note">If it says consent is required, open this once while signed in to DocuSign as the API user: <a href="${esc(ds.consentUrl)}" target="_blank" rel="noopener">grant consent</a></p>`:''}`
+        : `<div class="warnbox">Not configured.</div>
+           <p class="note">In DocuSign → Settings → Apps and Keys: create an app, add an RSA keypair, note the Integration Key, your User ID and API Account ID. Then set:</p>
+           <p class="note"><code>DS_INTEGRATION_KEY</code> <code>DS_USER_ID</code> <code>DS_ACCOUNT_ID</code> <code>DS_PRIVATE_KEY_B64</code> (base64 of the private key file) and <code>DS_ENV</code> = production (or demo for a sandbox).</p>`}
+        <p class="note" style="margin-top:14px"><b>Status updates:</b> in DocuSign → Settings → Connect, add a configuration pointing at <code>${esc(s.webhookUrl)}</code>, format JSON, events: envelope sent/delivered/completed/declined/voided. Set an HMAC key there and put the same value in <code>DS_WEBHOOK_SECRET</code>${ds.webhookSecretSet?' (set)':' (not set)'}. Without Connect, use the Refresh button on each envelope.</p>
+      </div>
+    </div>`;
+    const tm = document.getElementById('test-mail'); if(tm) tm.onclick = async ()=>{ await tryApi(()=>api('/api/settings/test-email',{method:'POST'})); toast('Test email sent'); };
+  }catch(e){ el.innerHTML = `<div class="warnbox">${esc(e.message)}</div>`; }
 }
 
 /* ---------- analytics ---------- */
 function renderAnalytics(){
-  const all = db.contacts;
+  const all = db.deals;
   const d30 = Date.now() - 30*864e5;
-  const newLeads30 = all.filter(c=>new Date(c.createdAt).getTime()>d30).length;
-  const won = all.filter(c=>!c.lost && c.stage==='Closed won');
-  const won30 = won.filter(c=>new Date(c.wonAt||c.createdAt).getTime()>d30);
-  const lost = all.filter(c=>c.lost);
-  const open = all.filter(c=>!c.lost && c.stage!=='Closed won');
-  const openVal = open.reduce((a,c)=>a+(Number(c.value)||0),0);
-  const wonVal = won.reduce((a,c)=>a+(Number(c.value)||0),0);
+  const newContacts30 = db.contacts.filter(c=>new Date(c.createdAt).getTime()>d30).length;
+  const newDeals30 = all.filter(d=>new Date(d.createdAt).getTime()>d30).length;
+  const won = all.filter(d=>!d.lost && d.stage==='Closed won');
+  const won30 = won.filter(d=>new Date(d.wonAt||d.createdAt).getTime()>d30);
+  const lost = all.filter(d=>d.lost);
+  const open = all.filter(dealOpen);
+  const openVal = sum(open), wonVal = sum(won);
   const closed = won.length + lost.length;
   const winRate = closed ? Math.round(won.length/closed*100) : 0;
   const avgDeal = won.length ? wonVal/won.length : 0;
+  const awaiting = db.envelopes.filter(e=>!['completed','declined','voided'].includes(e.status)).length;
 
-  const reached = STAGES.map(s=> all.filter(c=> (c.stageHistory||[]).some(h=>h.stage===s) || c.stage===s).length);
+  const reached = STAGES.map(s=> all.filter(d=> (d.stageHistory||[]).some(h=>h.stage===s) || d.stage===s).length);
   const maxReach = Math.max(1,...reached);
 
   const days = [...Array(30)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-(29-i)); return d; });
-  const perDay = days.map(d=> all.filter(c=>{ const t=new Date(c.createdAt); return t>=d && t<new Date(d.getTime()+864e5); }).length);
+  const perDay = days.map(d=> all.filter(x=>{ const t=new Date(x.createdAt); return t>=d && t<new Date(d.getTime()+864e5); }).length);
   const maxDay = Math.max(1,...perDay);
   const W=600,H=160,pad=18, bw=(W-pad*2)/30;
-  const bars = perDay.map((v,i)=>{ const h=v/maxDay*(H-pad*2); return `<rect x="${pad+i*bw+1}" y="${H-pad-h}" width="${bw-2}" height="${h}" fill="${i===29?'var(--magenta)':'var(--ink)'}" opacity="${v?1:.15}"/>`; }).join('');
+  const bars = perDay.map((n,i)=>{ const h=n/maxDay*(H-pad*2); return `<rect x="${pad+i*bw+1}" y="${H-pad-h}" width="${bw-2}" height="${h}" fill="${i===29?'var(--magenta)':'var(--ink)'}" opacity="${n?1:.15}"/>`; }).join('');
   const labels = [0,10,20,29].map(i=>`<text x="${pad+i*bw+bw/2}" y="${H-3}" font-size="10" fill="var(--ink3)" text-anchor="middle">${days[i].toLocaleDateString('en-US',{month:'short',day:'numeric'})}</text>`).join('');
 
-  const group = key => { const m={}; all.forEach(c=>{ const k=c[key]||'Unassigned'; m[k]=(m[k]||0)+1; }); return Object.entries(m).sort((a,b)=>b[1]-a[1]); };
+  const group = key => { const m={}; all.forEach(d=>{ const k=d[key]||'Unassigned'; m[k]=(m[k]||0)+1; }); return Object.entries(m).sort((a,b)=>b[1]-a[1]); };
   const barList = (entries, accent, money) => entries.length ? entries.map(([k,n])=>`<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill ${accent?'m':''}" style="width:${n/Math.max(1,entries[0][1])*100}%"></div></div><span class="n">${money?fmtMoney(n):n}</span></div>`).join('') : `<div class="empty">No data yet</div>`;
-  const byOwner = db.users.map(u=>[u.name, won.filter(c=>String(c.ownerId)===String(u.id)).reduce((a,c)=>a+(Number(c.value)||0),0)]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
-  const byCompany = db.companies.map(co=>[co.name, won.filter(c=>String(c.companyId)===String(co.id)).reduce((a,c)=>a+(Number(c.value)||0),0)]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const byOwner = db.users.map(u=>[u.name, sum(won.filter(d=>String(d.ownerId)===String(u.id)))]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
+  const byCompany = db.companies.map(co=>[co.name, sum(won.filter(d=>String(d.companyId)===String(co.id)))]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,6);
 
   return `<div class="top"><h1>Analytics</h1><span class="muted">Last 30 days where noted</span></div>
   <div class="kpis">
-    <div class="kpi"><div class="v">${newLeads30}</div><div class="l">New leads, 30 days</div></div>
-    <div class="kpi"><div class="v">${open.length}</div><div class="l">Open in pipeline</div></div>
+    <div class="kpi"><div class="v">${newContacts30}</div><div class="l">New contacts, 30 days</div></div>
+    <div class="kpi"><div class="v">${newDeals30}</div><div class="l">New deals, 30 days</div></div>
+    <div class="kpi"><div class="v">${open.length}</div><div class="l">Open deals</div></div>
     <div class="kpi"><div class="v">${fmtMoney(openVal)}</div><div class="l">Open pipeline value</div></div>
     <div class="kpi accent"><div class="v">${won30.length}</div><div class="l">Deals won, 30 days</div></div>
     <div class="kpi accent"><div class="v">${fmtMoney(wonVal)}</div><div class="l">Won revenue, all time</div></div>
     <div class="kpi"><div class="v">${winRate}%</div><div class="l">Win rate (${won.length} won / ${lost.length} lost)</div></div>
     <div class="kpi"><div class="v">${fmtMoney(avgDeal)}</div><div class="l">Average won deal</div></div>
+    <div class="kpi"><div class="v">${awaiting}</div><div class="l">Awaiting signature</div></div>
   </div>
   <div class="panels">
-    <div class="panel chart"><h3>New leads per day</h3><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New leads per day, last 30 days">${bars}${labels}</svg></div>
-    <div class="panel"><h3>Funnel — leads that reached each stage</h3>
+    <div class="panel chart"><h3>New deals per day</h3><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New deals per day, last 30 days">${bars}${labels}</svg></div>
+    <div class="panel"><h3>Funnel — deals that reached each stage</h3>
       ${STAGES.map((s,i)=>`<div class="fstep"><span>${esc(s)}</span><div class="f" style="width:${reached[i]/maxReach*100}%"></div><span class="pct">${reached[i]}${i&&reached[0]?` · ${Math.round(reached[i]/reached[0]*100)}%`:''}</span></div>`).join('')}</div>
-    <div class="panel"><h3>Leads by stage</h3><div class="bars">${barList([...STAGES.map(s=>[s, all.filter(c=>!c.lost&&c.stage===s).length]), ['Lost',lost.length]])}</div></div>
-    <div class="panel"><h3>Leads by vertical</h3><div class="bars">${barList(group('vertical'), true)}</div></div>
-    <div class="panel"><h3>Leads by source</h3><div class="bars">${barList(group('source'))}</div></div>
+    <div class="panel"><h3>Deals by stage</h3><div class="bars">${barList([...STAGES.map(s=>[s, all.filter(d=>!d.lost&&d.stage===s).length]), ['Lost',lost.length]])}</div></div>
+    <div class="panel"><h3>Deals by vertical</h3><div class="bars">${barList(group('vertical'), true)}</div></div>
+    <div class="panel"><h3>Deals by source</h3><div class="bars">${barList(group('source'))}</div></div>
     <div class="panel"><h3>Won revenue by owner</h3><div class="bars">${barList(byOwner, true, true)}</div></div>
     <div class="panel"><h3>Top companies by won revenue</h3><div class="bars">${barList(byCompany, true, true)}</div></div>
   </div>`;
@@ -413,11 +548,14 @@ function bindMain(){
   m.querySelectorAll('[data-new]').forEach(b=>b.onclick=()=>openForm(b.dataset.new));
   m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>openDetail(r.dataset.open, r.dataset.id));
   m.querySelectorAll('[data-mine]').forEach(b=>b.onclick=()=>{ mineOnly=b.dataset.mine==='1'; render(); });
+  m.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; render(); });
+  m.querySelectorAll('[data-import]').forEach(b=>b.onclick=()=>openImport(b.dataset.import));
+  bindTaskRows(m);
   const s = m.querySelector('#search');
   if(s){ s.oninput = ()=>{ search=s.value; const pos=s.selectionStart; render(); const s2=document.getElementById('search'); s2.focus(); s2.setSelectionRange(pos,pos); }; }
   m.querySelectorAll('.card').forEach(c=>{
-    c.onclick=()=>openDetail('contact', c.dataset.id);
-    c.onkeydown=e=>{ if(e.key==='Enter') openDetail('contact', c.dataset.id); };
+    c.onclick=()=>openDetail('deal', c.dataset.id);
+    c.onkeydown=e=>{ if(e.key==='Enter') openDetail('deal', c.dataset.id); };
     c.ondragstart=e=>{ e.dataTransfer.setData('text/plain', c.dataset.id); c.classList.add('dragging'); };
     c.ondragend=()=>c.classList.remove('dragging');
   });
@@ -427,25 +565,33 @@ function bindMain(){
     col.ondrop=e=>{ e.preventDefault(); col.classList.remove('over'); setStage(e.dataTransfer.getData('text/plain'), col.dataset.stage); };
   });
 }
+function bindTaskRows(scope, after){
+  scope.querySelectorAll('[data-done]').forEach(cb=>cb.onchange=async ()=>{ await tryApi(()=>api(`/api/tasks/${cb.dataset.done}`,{method:'PUT',body:{done:cb.checked}})); await refresh(); if(after) after(); });
+  scope.querySelectorAll('[data-del-task]').forEach(b=>b.onclick=async ()=>{ if(!confirm('Delete this task?')) return; await tryApi(()=>api(`/api/tasks/${b.dataset.delTask}`,{method:'DELETE'})); await refresh(); if(after) after(); });
+  scope.querySelectorAll('[data-open-deal]').forEach(a=>a.onclick=()=>openDetail('deal', a.dataset.openDeal));
+  scope.querySelectorAll('[data-open-contact]').forEach(a=>a.onclick=()=>openDetail('contact', a.dataset.openContact));
+}
 
 async function setStage(id, stage){
-  const c = byId(db.contacts,id); if(!c || (c.stage===stage && !c.lost)) return;
-  await tryApi(()=>api(`/api/contacts/${id}/stage`,{method:'PATCH',body:{stage}}));
-  await refresh(); toast(`${fullName(c)} → ${stage}`);
+  const d = byId(db.deals,id); if(!d || (d.stage===stage && !d.lost)) return;
+  await tryApi(()=>api(`/api/deals/${id}/stage`,{method:'PATCH',body:{stage}}));
+  await refresh(); toast(`${d.name} → ${stage}`);
 }
 
 /* ---------- drawer ---------- */
 const drawer = document.getElementById('drawer'), scrim = document.getElementById('scrim');
-function openDrawer(html){ drawer.innerHTML = html; drawer.classList.add('open'); scrim.classList.add('open'); drawer.setAttribute('aria-hidden','false'); const f=drawer.querySelector('input,select,textarea,button'); if(f) f.focus(); drawer.querySelector('[data-close]').onclick = closeDrawer; }
+function openDrawer(html){ drawer.innerHTML = html; drawer.classList.add('open'); scrim.classList.add('open'); drawer.setAttribute('aria-hidden','false'); drawer.scrollTop=0; const f=drawer.querySelector('input:not([type=checkbox]),select,textarea,button'); if(f) f.focus(); drawer.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeDrawer); }
 function closeDrawer(){ drawer.classList.remove('open'); scrim.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); }
 scrim.onclick = closeDrawer;
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDrawer(); });
 const dv = sel => (drawer.querySelector(sel)||{value:''}).value.trim();
+const dhead = (title, sub='') => `<div class="dh"><div><h2>${title}</h2>${sub?`<div class="sub">${sub}</div>`:''}</div><button class="btn ghost" data-close>✕</button></div>`;
 
+/* ---------- forms ---------- */
 function openForm(kind, id, preset={}){
   if(kind==='contact'){
-    const c = id ? byId(db.contacts,id) : Object.assign({stage:'New lead', ownerId: me.id}, preset);
-    openDrawer(`<div class="dh"><h2>${id?'Edit contact':'New lead'}</h2><button class="btn ghost" data-close>✕</button></div>
+    const c = id ? byId(db.contacts,id) : Object.assign({ownerId: me.id}, preset);
+    openDrawer(`${dhead(id?'Edit contact':'New contact')}
     <div class="grid2">
       <div class="field"><label>First name</label><input id="f-first" value="${esc(c.first)}"></div>
       <div class="field"><label>Last name</label><input id="f-last" value="${esc(c.last)}"></div>
@@ -455,24 +601,57 @@ function openForm(kind, id, preset={}){
       <div class="field"><label>Phone</label><input id="f-phone" value="${esc(c.phone)}"></div>
       <div class="field"><label>Vertical</label><select id="f-vertical"><option value="">—</option>${opts(VERTICALS,c.vertical)}</select></div>
       <div class="field"><label>Source</label><select id="f-source"><option value="">—</option>${opts(SOURCES,c.source)}</select></div>
-      <div class="field"><label>Stage</label><select id="f-stage">${opts(STAGES,c.stage)}</select></div>
-      <div class="field"><label>Deal value ($)</label><input id="f-value" type="number" min="0" step="100" value="${esc(c.value||'')}"></div>
       <div class="field"><label>Owner</label><select id="f-owner">${ownerOpts(c.ownerId)}</select></div>
     </div>
     <div class="field"><label>Notes</label><textarea id="f-notes">${esc(c.notes)}</textarea></div>
-    <div class="row"><button class="btn primary" id="f-save">${id?'Save changes':'Add lead'}</button>${id?`<button class="btn ghost danger" id="f-del">Delete</button>`:''}</div>`);
+    ${id?'':`<div class="field"><label class="inline"><input type="checkbox" id="f-deal" checked> Also create a deal for this contact</label></div>
+    <div id="f-dealbox" class="grid2">
+      <div class="field"><label>Deal name</label><input id="f-dealname" placeholder="Defaults to company or contact name"></div>
+      <div class="field"><label>Stage</label><select id="f-stage">${opts(STAGES,'New lead')}</select></div>
+      <div class="field"><label>Deal value ($)</label><input id="f-value" type="number" min="0" step="100"></div>
+    </div>`}
+    <div class="row"><button class="btn primary" id="f-save">${id?'Save changes':'Add contact'}</button>${id?`<button class="btn ghost danger" id="f-del">Delete</button>`:''}</div>`);
+    const dealCb = drawer.querySelector('#f-deal'); if(dealCb) dealCb.onchange = ()=>drawer.querySelector('#f-dealbox').classList.toggle('hide', !dealCb.checked);
     drawer.querySelector('#f-save').onclick = async ()=>{
-      const body = { first:dv('#f-first'), last:dv('#f-last'), title:dv('#f-title'), companyId:dv('#f-company'), email:dv('#f-email'), phone:dv('#f-phone'), vertical:dv('#f-vertical'), source:dv('#f-source'), stage:dv('#f-stage'), value:dv('#f-value'), notes:dv('#f-notes'), ownerId:dv('#f-owner') };
+      const body = { first:dv('#f-first'), last:dv('#f-last'), title:dv('#f-title'), companyId:dv('#f-company'), email:dv('#f-email'), phone:dv('#f-phone'), vertical:dv('#f-vertical'), source:dv('#f-source'), notes:dv('#f-notes'), ownerId:dv('#f-owner') };
       if(!body.first && !body.last){ toast('Add at least a first or last name', true); return; }
-      const saved = await tryApi(()=>api(id?`/api/contacts/${id}`:'/api/contacts',{method:id?'PUT':'POST',body}));
+      if(!id){ body.createDeal = dealCb.checked; body.dealName=dv('#f-dealname'); body.stage=dv('#f-stage'); body.value=dv('#f-value'); }
+      const r = await tryApi(()=>api(id?`/api/contacts/${id}`:'/api/contacts',{method:id?'PUT':'POST',body}));
       await refresh();
-      if(id){ openDetail('contact',id); toast('Saved'); } else { closeDrawer(); toast('Lead added'); }
+      if(id){ openDetail('contact',id); toast('Saved'); } else { toast(r.deal?'Contact and deal added':'Contact added'); openDetail('contact', r.contact.id); }
     };
     const del = drawer.querySelector('#f-del');
-    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${fullName(c)}? This can't be undone.`)){ await tryApi(()=>api(`/api/contacts/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${fullName(c)}? Their deals stay, unlinked.`)){ await tryApi(()=>api(`/api/contacts/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+  } else if(kind==='deal'){
+    const d = id ? byId(db.deals,id) : Object.assign({stage:'New lead', ownerId: me.id}, preset);
+    if(!id && d.contactId && !d.companyId){ d.companyId = (byId(db.contacts,d.contactId)||{}).companyId; }
+    openDrawer(`${dhead(id?'Edit deal':'New deal')}
+    <div class="field"><label>Deal name</label><input id="d-name" value="${esc(d.name||'')}" placeholder="e.g. Americor — Email + CTV program"></div>
+    <div class="grid2">
+      <div class="field"><label>Company</label><select id="d-company">${companyOpts(d.companyId)}</select></div>
+      <div class="field"><label>Primary contact</label><select id="d-contact">${contactOpts(d.contactId, d.companyId)}</select></div>
+      <div class="field"><label>Stage</label><select id="d-stage">${opts(STAGES,d.stage)}</select></div>
+      <div class="field"><label>Deal value ($)</label><input id="d-value" type="number" min="0" step="100" value="${esc(d.value||'')}"></div>
+      <div class="field"><label>Vertical</label><select id="d-vertical"><option value="">—</option>${opts(VERTICALS,d.vertical)}</select></div>
+      <div class="field"><label>Source</label><select id="d-source"><option value="">—</option>${opts(SOURCES,d.source)}</select></div>
+      <div class="field"><label>Owner</label><select id="d-owner">${ownerOpts(d.ownerId)}</select></div>
+      <div class="field"><label>Expected close</label><input id="d-close" type="date" value="${esc(d.expectedClose||'')}"></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="d-notes">${esc(d.notes||'')}</textarea></div>
+    <div class="row"><button class="btn primary" id="d-save">${id?'Save changes':'Add deal'}</button>${id?`<button class="btn ghost danger" id="d-del">Delete</button>`:''}</div>`);
+    drawer.querySelector('#d-company').onchange = e=>{ const sel=drawer.querySelector('#d-contact'); const cur=sel.value; sel.innerHTML = contactOpts(cur, e.target.value); if(!dv('#d-name') && e.target.value) drawer.querySelector('#d-name').value = companyName(e.target.value); };
+    drawer.querySelector('#d-contact').onchange = e=>{ const c=byId(db.contacts,e.target.value); if(c && c.companyId && !dv('#d-company')){ drawer.querySelector('#d-company').value=c.companyId; } if(c && !dv('#d-name')) drawer.querySelector('#d-name').value = companyName(c.companyId)||fullName(c); };
+    drawer.querySelector('#d-save').onclick = async ()=>{
+      const body = { name:dv('#d-name'), companyId:dv('#d-company'), contactId:dv('#d-contact'), stage:dv('#d-stage'), value:dv('#d-value'), vertical:dv('#d-vertical'), source:dv('#d-source'), ownerId:dv('#d-owner'), expectedClose:dv('#d-close'), notes:dv('#d-notes') };
+      if(!body.name){ toast('Deal name is required', true); return; }
+      const r = await tryApi(()=>api(id?`/api/deals/${id}`:'/api/deals',{method:id?'PUT':'POST',body}));
+      await refresh(); openDetail('deal', id||r.id); toast(id?'Saved':'Deal added');
+    };
+    const del = drawer.querySelector('#d-del');
+    if(del) del.onclick = async ()=>{ if(confirm(`Delete deal "${d.name}"? Tasks and envelopes on it are removed too.`)){ await tryApi(()=>api(`/api/deals/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
   } else if(kind==='company'){
     const co = id ? byId(db.companies,id) : {};
-    openDrawer(`<div class="dh"><h2>${id?'Edit company':'New company'}</h2><button class="btn ghost" data-close>✕</button></div>
+    openDrawer(`${dhead(id?'Edit company':'New company')}
     <div class="field"><label>Company name</label><input id="c-name" value="${esc(co.name)}"></div>
     <div class="grid2">
       <div class="field"><label>Website / domain</label><input id="c-domain" value="${esc(co.domain)}"></div>
@@ -487,16 +666,18 @@ function openForm(kind, id, preset={}){
     drawer.querySelector('#c-save').onclick = async ()=>{
       const body = { name:dv('#c-name'), domain:dv('#c-domain'), phone:dv('#c-phone'), vertical:dv('#c-vertical'), size:dv('#c-size'), city:dv('#c-city'), state:dv('#c-state'), notes:dv('#c-notes') };
       if(!body.name){ toast('Company name is required', true); return; }
-      await tryApi(()=>api(id?`/api/companies/${id}`:'/api/companies',{method:id?'PUT':'POST',body}));
-      await refresh();
-      if(id){ openDetail('company',id); toast('Saved'); } else { closeDrawer(); toast('Company added'); }
+      const r = await tryApi(()=>api(id?`/api/companies/${id}`:'/api/companies',{method:id?'PUT':'POST',body}));
+      await refresh(); openDetail('company', id||r.id); toast(id?'Saved':'Company added');
     };
     const del = drawer.querySelector('#c-del');
-    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${co.name}? Its contacts stay, unlinked.`)){ await tryApi(()=>api(`/api/companies/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+    if(del) del.onclick = async ()=>{ if(confirm(`Delete ${co.name}? Its contacts and deals stay, unlinked.`)){ await tryApi(()=>api(`/api/companies/${id}`,{method:'DELETE'})); await refresh(); closeDrawer(); toast('Deleted'); } };
+  } else if(kind==='task'){
+    openDrawer(`${dhead('New task')}${taskFormHtml(preset)}<div class="row"><button class="btn primary" id="t-save">Add task</button></div>`);
+    drawer.querySelector('#t-save').onclick = async ()=>{ await submitTask(preset); closeDrawer(); render(); };
   } else if(kind==='user'){
     const u = id ? byId(db.users,id) : {role:'member',active:true};
     const isMe = id && String(id)===String(me.id);
-    openDrawer(`<div class="dh"><h2>${id?'Edit user':'Add user'}</h2><button class="btn ghost" data-close>✕</button></div>
+    openDrawer(`${dhead(id?'Edit user':'Add user')}
     <div class="field"><label>Name</label><input id="u-name" value="${esc(u.name)}"></div>
     <div class="field"><label>Email</label><input id="u-email" type="email" value="${esc(u.email)}" ${id?'disabled':''}></div>
     <div class="field"><label>${id?'New password (leave blank to keep)':'Temporary password (8+ characters)'}</label><input id="u-pass" type="password" autocomplete="new-password"></div>
@@ -505,7 +686,7 @@ function openForm(kind, id, preset={}){
       ${id?`<div class="field"><label>Status</label><select id="u-active" ${isMe?'disabled':''}><option value="1" ${u.active?'selected':''}>Active</option><option value="0" ${!u.active?'selected':''}>Deactivated</option></select></div>`:''}
     </div>
     <div class="row"><button class="btn primary" id="u-save">${id?'Save changes':'Add user'}</button></div>
-    ${id?'':'<div class="muted" style="font-size:13px;margin-top:12px">Share the temporary password with them directly; they can change it after signing in.</div>'}`);
+    ${id?'':'<p class="note" style="margin-top:12px">Share the temporary password with them directly; they can change it after signing in.</p>'}`);
     drawer.querySelector('#u-save').onclick = async ()=>{
       const body = { name:dv('#u-name'), email:dv('#u-email'), password:(drawer.querySelector('#u-pass')||{}).value||'', role:dv('#u-role')||u.role, active: id ? dv('#u-active')!=='0' : true };
       await tryApi(()=>api(id?`/api/users/${id}`:'/api/users',{method:id?'PUT':'POST',body}));
@@ -513,76 +694,255 @@ function openForm(kind, id, preset={}){
     };
   }
 }
+function taskFormHtml(preset={}){
+  return `<div class="field"><label>Task</label><input id="t-title" placeholder="Follow up on proposal"></div>
+  <div class="grid2">
+    <div class="field"><label>Due</label><input id="t-due" type="date" value="${esc(preset.dueAt||'')}"></div>
+    <div class="field"><label>Assign to</label><select id="t-assignee">${ownerOpts(preset.assigneeId||me.id)}</select></div>
+    ${preset.dealId||preset.contactId?'':`<div class="field"><label>Deal (optional)</label><select id="t-deal"><option value="">—</option>${db.deals.filter(dealOpen).map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></div>`}
+  </div>`;
+}
+async function submitTask(preset={}){
+  const title = dv('#t-title'); if(!title){ toast('Task needs a title', true); throw new Error('no title'); }
+  await tryApi(()=>api('/api/tasks',{method:'POST',body:{ title, dueAt:dv('#t-due'), assigneeId:dv('#t-assignee'), dealId: preset.dealId||dv('#t-deal'), contactId: preset.contactId||'' }}));
+  await refresh(); toast('Task added');
+}
 
 function openPassword(){
-  openDrawer(`<div class="dh"><h2>Change password</h2><button class="btn ghost" data-close>✕</button></div>
+  openDrawer(`${dhead('Change password')}
   <div class="field"><label>Current password</label><input id="p-cur" type="password" autocomplete="current-password"></div>
   <div class="field"><label>New password (8+ characters)</label><input id="p-new" type="password" autocomplete="new-password"></div>
   <div class="row"><button class="btn primary" id="p-save">Update password</button></div>`);
   drawer.querySelector('#p-save').onclick = async ()=>{ await tryApi(()=>api('/api/auth/password',{method:'POST',body:{current:drawer.querySelector('#p-cur').value, next:drawer.querySelector('#p-new').value}})); closeDrawer(); toast('Password updated'); };
 }
 
+/* ---------- detail drawers ---------- */
+function tasksSection(key, id, preset){
+  const ts = tasksOf(key,id).filter(t=>!t.done), done = tasksOf(key,id).filter(t=>t.done);
+  return `<div class="section tasklist"><h3>Tasks <button class="btn sm" id="t-new">Add task</button></h3>
+    <div id="t-form" class="hide" style="margin-bottom:10px">${taskFormHtml(preset)}<div class="row"><button class="btn sm primary" id="t-save">Add</button><button class="btn sm ghost" id="t-cancel">Cancel</button></div></div>
+    ${ts.length ? ts.map(t=>taskRow(t,false)).join('') : ''}${done.length?done.slice(0,5).map(t=>taskRow(t,false)).join(''):''}
+    ${!ts.length&&!done.length?'<div class="empty">No tasks</div>':''}
+  </div>`;
+}
+function bindTasksSection(reopen, preset){
+  drawer.querySelector('#t-new').onclick = ()=>{ drawer.querySelector('#t-form').classList.remove('hide'); drawer.querySelector('#t-title').focus(); };
+  drawer.querySelector('#t-cancel').onclick = ()=>drawer.querySelector('#t-form').classList.add('hide');
+  drawer.querySelector('#t-save').onclick = async ()=>{ await submitTask(preset); reopen(); };
+  drawer.querySelector('#t-title').onkeydown = async e=>{ if(e.key==='Enter'){ await submitTask(preset); reopen(); } };
+  bindTaskRows(drawer, reopen);
+}
+function activitySection(){
+  return `<div class="section"><h3>Activity</h3>
+    <div class="row" style="margin-bottom:10px"><select id="a-type" style="width:120px">${opts(ACT_TYPES,'Note')}</select><input id="a-text" placeholder="Log a call, email, meeting…" style="flex:1;min-width:160px"><button class="btn sm primary" id="a-add">Log</button></div>
+    <div id="a-list"><div class="empty">Loading…</div></div></div>`;
+}
+function bindActivity(params, reopen){
+  const add = async ()=>{ const t=drawer.querySelector('#a-text').value.trim(); if(!t) return; await tryApi(()=>api('/api/activities',{method:'POST',body:{...params, type:drawer.querySelector('#a-type').value, text:t}})); drawer.querySelector('#a-text').value=''; loadActivities(params); toast('Logged'); };
+  drawer.querySelector('#a-add').onclick = add;
+  drawer.querySelector('#a-text').onkeydown = e=>{ if(e.key==='Enter') add(); };
+  loadActivities(params);
+}
+async function loadActivities(params){
+  const list = drawer.querySelector('#a-list'); if(!list) return;
+  try{
+    const acts = await api('/api/activities?'+new URLSearchParams(params));
+    list.innerHTML = acts.length ? acts.map(a=>`<div class="act"><span class="t">${fmtDate(a.at)}</span><span><span class="tp">${esc(a.type)}</span>${esc(a.text)}${a.userName?`<span class="by">— ${esc(a.userName)}</span>`:''}</span></div>`).join('') : `<div class="empty">No activity logged yet</div>`;
+  }catch(e){ list.innerHTML = `<div class="empty">Couldn't load activity</div>`; }
+}
+const envStatusLabel = s => ({sent:'Sent, awaiting signature',delivered:'Opened by signer',completed:'Signed',declined:'Declined',voided:'Voided',created:'Draft'})[s] || s;
+
 async function openDetail(kind, id){
-  if(kind==='contact'){
+  if(kind==='deal'){
+    const d = byId(db.deals,id); if(!d) return;
+    const c = byId(db.contacts,d.contactId), co = byId(db.companies,d.companyId);
+    const envs = envsOf(d.id), canSign = SIGN_STAGES.includes(d.stage) && !d.lost;
+    const reopen = ()=>openDetail('deal',id);
+    openDrawer(`${dhead(esc(d.name), [co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:'', c?`<a data-open-contact="${c.id}">${esc(fullName(c))}</a>`:''].filter(Boolean).join(' · '))}
+    <div class="row"><button class="btn sm" id="d-edit">Edit</button>${d.lost?`<button class="btn sm" id="d-reopen">Reopen deal</button>`:`<button class="btn sm danger" id="d-lost">Mark lost</button>`}
+      ${canSign?`<button class="btn sm primary" id="d-sign">Send for signature</button>`:''}<span style="margin-left:auto">${stageTag(d)}</span></div>
+    ${!d.lost?`<div class="stages">${STAGES.map(s=>`<button data-stage="${esc(s)}" ${d.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
+    <div class="section"><h3>Details</h3><div class="kv">
+      <span class="k">Deal value</span><span>${d.value?fmtMoney(d.value):'—'}</span>
+      <span class="k">Owner</span><span>${esc(userName(d.ownerId)||'—')}</span>
+      <span class="k">Expected close</span><span>${d.expectedClose?fmtDay(d.expectedClose):'—'}</span>
+      <span class="k">Vertical</span><span>${esc(d.vertical||'—')}</span>
+      <span class="k">Source</span><span>${esc(d.source||'—')}</span>
+      <span class="k">Contact</span><span>${c?`${esc(fullName(c))}${c.email?` · <a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:''}${c.phone?` · <a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:''}`:'—'}</span>
+      <span class="k">Created</span><span>${new Date(d.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}${d.createdBy?` by ${esc(userName(d.createdBy))}`:''}</span>
+      ${d.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(d.notes)}</span>`:''}
+    </div></div>
+    <div class="section"><h3>Signatures${envs.length?` (${envs.length})`:''}</h3>
+      ${envs.length ? envs.map(e=>`<div class="env"><div><b>${esc(e.templateName||'Document')}</b><div class="s">${esc(e.signerName)} &lt;${esc(e.signerEmail)}&gt; · ${envStatusLabel(e.status)} · ${e.status==='completed'&&e.completedAt?`signed ${fmtDate(e.completedAt)}`:`sent ${fmtDate(e.sentAt)} by ${esc(userName(e.sentBy))}`}</div></div>
+        <div class="row">${['completed','declined','voided'].includes(e.status)?'':`<button class="btn sm" data-env-refresh="${e.id}">Refresh</button><button class="btn sm ghost danger" data-env-void="${e.id}">Void</button>`}</div></div>`).join('')
+      : `<div class="empty">${canSign ? (integrations.docusign?'Nothing sent yet.':'DocuSign isn\'t connected — an admin can set it up under Settings.') : `Available once the deal reaches ${SIGN_STAGES.join(' or ')}.`}</div>`}
+    </div>
+    ${tasksSection('dealId', d.id, {dealId:d.id})}
+    ${activitySection()}`);
+    drawer.querySelector('#d-edit').onclick = ()=>openForm('deal',id);
+    drawer.querySelectorAll('[data-open-company]').forEach(a=>a.onclick=()=>openDetail('company', a.dataset.openCompany));
+    drawer.querySelectorAll('[data-open-contact]').forEach(a=>a.onclick=()=>openDetail('contact', a.dataset.openContact));
+    drawer.querySelectorAll('[data-stage]').forEach(b=>b.onclick=async ()=>{ await setStage(id,b.dataset.stage); reopen(); });
+    const lostBtn = drawer.querySelector('#d-lost'); if(lostBtn) lostBtn.onclick=async ()=>{ await tryApi(()=>api(`/api/deals/${id}/lost`,{method:'PATCH',body:{lost:true}})); await refresh(); reopen(); toast('Marked lost'); };
+    const rb = drawer.querySelector('#d-reopen'); if(rb) rb.onclick=async ()=>{ await tryApi(()=>api(`/api/deals/${id}/lost`,{method:'PATCH',body:{lost:false}})); await refresh(); reopen(); toast('Reopened'); };
+    const sign = drawer.querySelector('#d-sign'); if(sign) sign.onclick=()=>openSign(d);
+    drawer.querySelectorAll('[data-env-refresh]').forEach(b=>b.onclick=async ()=>{ b.disabled=true; const e=await tryApi(()=>api(`/api/envelopes/${b.dataset.envRefresh}/refresh`,{method:'POST'})); await refresh(); reopen(); toast(envStatusLabel(e.status)); });
+    drawer.querySelectorAll('[data-env-void]').forEach(b=>b.onclick=async ()=>{ const reason=prompt('Reason for voiding (sent to the signer):','Superseded'); if(reason==null) return; await tryApi(()=>api(`/api/envelopes/${b.dataset.envVoid}/void`,{method:'POST',body:{reason}})); await refresh(); reopen(); toast('Envelope voided'); });
+    bindTasksSection(reopen, {dealId:d.id});
+    bindActivity({dealId:d.id}, reopen);
+  } else if(kind==='contact'){
     const c = byId(db.contacts,id); if(!c) return;
-    const co = byId(db.companies,c.companyId);
-    openDrawer(`<div class="dh"><div><h2>${esc(fullName(c))}</h2><div class="sub">${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a href="#" data-open-company="${co.id}">${esc(co.name)}</a>`:''}</div></div><button class="btn ghost" data-close>✕</button></div>
-    <div class="row"><button class="btn sm" id="d-edit">Edit</button>${c.lost?`<button class="btn sm" id="d-reopen">Reopen lead</button>`:`<button class="btn sm danger" id="d-lost">Mark lost</button>`}<span style="margin-left:auto">${stageTag(c)}</span></div>
-    ${!c.lost?`<div class="stages">${STAGES.map(s=>`<button data-stage="${esc(s)}" ${c.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
+    const co = byId(db.companies,c.companyId), ds = dealsOf.contact(c.id);
+    const reopen = ()=>openDetail('contact',id);
+    openDrawer(`${dhead(esc(fullName(c)), `${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:''}`)}
+    <div class="row"><button class="btn sm" id="c-edit">Edit</button><button class="btn sm" id="c-newdeal">New deal</button></div>
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Email</span><span>${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</span>
       <span class="k">Phone</span><span>${c.phone?`<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:'—'}</span>
-      <span class="k">Deal value</span><span>${c.value?fmtMoney(c.value):'—'}</span>
       <span class="k">Owner</span><span>${esc(userName(c.ownerId)||'—')}</span>
       <span class="k">Vertical</span><span>${esc(c.vertical||'—')}</span>
       <span class="k">Source</span><span>${esc(c.source||'—')}</span>
       <span class="k">Added</span><span>${new Date(c.createdAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}${c.createdBy?` by ${esc(userName(c.createdBy))}`:''}</span>
       ${c.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(c.notes)}</span>`:''}
     </div></div>
-    <div class="section"><h3>Activity</h3>
-      <div class="row" style="margin-bottom:10px"><select id="a-type" style="width:120px">${opts(ACT_TYPES,'Note')}</select><input id="a-text" placeholder="Log a call, email, meeting…" style="flex:1;min-width:160px"><button class="btn sm primary" id="a-add">Log</button></div>
-      <div id="a-list"><div class="empty">Loading…</div></div>
-    </div>`);
-    drawer.querySelector('#d-edit').onclick = ()=>openForm('contact',id);
-    const oc = drawer.querySelector('[data-open-company]'); if(oc) oc.onclick=e=>{ e.preventDefault(); openDetail('company', oc.dataset.openCompany); };
-    drawer.querySelectorAll('[data-stage]').forEach(b=>b.onclick=async ()=>{ await setStage(id,b.dataset.stage); openDetail('contact',id); });
-    const lostBtn = drawer.querySelector('#d-lost'); if(lostBtn) lostBtn.onclick=async ()=>{ await tryApi(()=>api(`/api/contacts/${id}/lost`,{method:'PATCH',body:{lost:true}})); await refresh(); openDetail('contact',id); toast('Marked lost'); };
-    const reopen = drawer.querySelector('#d-reopen'); if(reopen) reopen.onclick=async ()=>{ await tryApi(()=>api(`/api/contacts/${id}/lost`,{method:'PATCH',body:{lost:false}})); await refresh(); openDetail('contact',id); toast('Reopened'); };
-    const add = async ()=>{ const t=drawer.querySelector('#a-text').value.trim(); if(!t) return; await tryApi(()=>api(`/api/contacts/${id}/activities`,{method:'POST',body:{type:drawer.querySelector('#a-type').value,text:t}})); drawer.querySelector('#a-text').value=''; loadActivities(id); toast('Logged'); };
-    drawer.querySelector('#a-add').onclick = add;
-    drawer.querySelector('#a-text').onkeydown = e=>{ if(e.key==='Enter') add(); };
-    loadActivities(id);
+    <div class="section"><h3>Deals (${ds.length})</h3>
+      ${ds.length ? ds.map(d=>`<div class="act" style="cursor:pointer" data-open-deal="${d.id}"><span style="flex:1"><strong>${esc(d.name)}</strong> <span class="muted">${d.value?fmtMoney(d.value):''}</span></span>${stageTag(d)}</div>`).join('') : `<div class="empty">No deals yet</div>`}
+    </div>
+    ${tasksSection('contactId', c.id, {contactId:c.id})}
+    ${activitySection()}`);
+    drawer.querySelector('#c-edit').onclick = ()=>openForm('contact',id);
+    drawer.querySelector('#c-newdeal').onclick = ()=>openForm('deal', null, {contactId:c.id, companyId:c.companyId, vertical:c.vertical, source:c.source, ownerId:c.ownerId, name: co?co.name:fullName(c)});
+    drawer.querySelectorAll('[data-open-company]').forEach(a=>a.onclick=()=>openDetail('company', a.dataset.openCompany));
+    drawer.querySelectorAll('[data-open-deal]').forEach(a=>a.onclick=()=>openDetail('deal', a.dataset.openDeal));
+    bindTasksSection(reopen, {contactId:c.id});
+    bindActivity({contactId:c.id}, reopen);
   } else if(kind==='company'){
     const co = byId(db.companies,id); if(!co) return;
-    const cs = db.contacts.filter(c=>String(c.companyId)===String(id));
-    const open = cs.filter(c=>!c.lost && c.stage!=='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
-    const won = cs.filter(c=>!c.lost && c.stage==='Closed won').reduce((a,c)=>a+(Number(c.value)||0),0);
-    openDrawer(`<div class="dh"><div><h2>${esc(co.name)}</h2><div class="sub">${co.domain?`<a href="https://${esc(co.domain)}" target="_blank" rel="noopener">${esc(co.domain)}</a>`:''}${co.domain&&(co.city||co.state)?' · ':''}${esc([co.city,co.state].filter(Boolean).join(', '))}</div></div><button class="btn ghost" data-close>✕</button></div>
-    <div class="row"><button class="btn sm" id="d-edit">Edit</button><button class="btn sm" id="d-addc">Add contact here</button></div>
+    const cs = db.contacts.filter(c=>String(c.companyId)===String(id)), ds = dealsOf.company(id);
+    openDrawer(`${dhead(esc(co.name), `${co.domain?`<a href="https://${esc(co.domain)}" target="_blank" rel="noopener">${esc(co.domain)}</a>`:''}${co.domain&&(co.city||co.state)?' · ':''}${esc([co.city,co.state].filter(Boolean).join(', '))}`)}
+    <div class="row"><button class="btn sm" id="co-edit">Edit</button><button class="btn sm" id="co-addc">Add contact</button><button class="btn sm" id="co-addd">New deal</button></div>
     <div class="section"><h3>Profile</h3><div class="kv">
       <span class="k">Vertical</span><span>${esc(co.vertical||'—')}</span>
       <span class="k">Size</span><span>${esc(co.size||'—')}</span>
       <span class="k">Phone</span><span>${esc(co.phone||'—')}</span>
-      <span class="k">Open pipeline</span><span>${fmtMoney(open)}</span>
-      <span class="k">Won revenue</span><span>${fmtMoney(won)}</span>
+      <span class="k">Open pipeline</span><span>${fmtMoney(sum(ds.filter(dealOpen)))}</span>
+      <span class="k">Won revenue</span><span>${fmtMoney(sum(ds.filter(d=>!d.lost&&d.stage==='Closed won')))}</span>
       ${co.notes?`<span class="k">Notes</span><span style="white-space:pre-wrap">${esc(co.notes)}</span>`:''}
     </div></div>
+    <div class="section"><h3>Deals (${ds.length})</h3>
+      ${ds.length ? ds.map(d=>`<div class="act" style="cursor:pointer" data-open-deal="${d.id}"><span style="flex:1"><strong>${esc(d.name)}</strong> <span class="muted">${esc(contactName(d.contactId))}${d.value?` · ${fmtMoney(d.value)}`:''}</span></span>${stageTag(d)}</div>`).join('') : `<div class="empty">No deals yet</div>`}
+    </div>
     <div class="section"><h3>Contacts (${cs.length})</h3>
-      ${cs.length ? cs.map(c=>`<div class="act" style="cursor:pointer" data-open-contact="${c.id}"><span style="flex:1"><strong>${esc(fullName(c))}</strong> <span class="muted">${esc(c.title||'')}</span></span>${stageTag(c)}</div>`).join('') : `<div class="empty">No contacts linked yet</div>`}
+      ${cs.length ? cs.map(c=>`<div class="act" style="cursor:pointer" data-open-contact="${c.id}"><span style="flex:1"><strong>${esc(fullName(c))}</strong> <span class="muted">${esc(c.title||'')}</span></span></div>`).join('') : `<div class="empty">No contacts linked yet</div>`}
     </div>`);
-    drawer.querySelector('#d-edit').onclick = ()=>openForm('company',id);
-    drawer.querySelector('#d-addc').onclick = ()=>openForm('contact', null, {companyId:id, vertical:co.vertical});
+    drawer.querySelector('#co-edit').onclick = ()=>openForm('company',id);
+    drawer.querySelector('#co-addc').onclick = ()=>openForm('contact', null, {companyId:id, vertical:co.vertical});
+    drawer.querySelector('#co-addd').onclick = ()=>openForm('deal', null, {companyId:id, vertical:co.vertical, name:co.name});
     drawer.querySelectorAll('[data-open-contact]').forEach(r=>r.onclick=()=>openDetail('contact', r.dataset.openContact));
+    drawer.querySelectorAll('[data-open-deal]').forEach(r=>r.onclick=()=>openDetail('deal', r.dataset.openDeal));
   } else if(kind==='user'){
     openForm('user', id);
   }
 }
-async function loadActivities(id){
-  const list = drawer.querySelector('#a-list'); if(!list) return;
-  try{
-    const acts = await api(`/api/contacts/${id}/activities`);
-    list.innerHTML = acts.length ? acts.map(a=>`<div class="act"><span class="t">${fmtDate(a.at)}</span><span><span class="tp">${esc(a.type)}</span>${esc(a.text)}${a.userName?`<span class="by">— ${esc(a.userName)}</span>`:''}</span></div>`).join('') : `<div class="empty">No activity logged yet</div>`;
-  }catch(e){ list.innerHTML = `<div class="empty">Couldn't load activity</div>`; }
+
+/* ---------- DocuSign send ---------- */
+async function openSign(d){
+  const c = byId(db.contacts,d.contactId);
+  openDrawer(`${dhead('Send for signature', esc(d.name))}
+    ${integrations.docusign ? '' : `<div class="warnbox">DocuSign isn't connected. An admin can set it up under Settings.</div>`}
+    <div class="field"><label>Template</label><select id="s-template" ${integrations.docusign?'':'disabled'}><option value="">Loading templates…</option></select></div>
+    <div id="s-roles"></div>
+    <div class="field"><label>Email subject</label><input id="s-subject" value="27 Squared Marketing — ${esc(d.name)}"></div>
+    <div class="row"><button class="btn primary" id="s-send" disabled>Send</button><button class="btn ghost" data-close>Cancel</button></div>`);
+  if(!integrations.docusign) return;
+  const sel = drawer.querySelector('#s-template');
+  let templates = [];
+  try{ templates = await api('/api/docusign/templates'); }
+  catch(e){ sel.innerHTML = `<option value="">Couldn't load templates</option>`; toast(e.message, true); return; }
+  sel.innerHTML = `<option value="">Choose a template</option>` + templates.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  sel.onchange = async ()=>{
+    const roles = drawer.querySelector('#s-roles'); roles.innerHTML = '<div class="empty">Loading roles…</div>';
+    drawer.querySelector('#s-send').disabled = true;
+    if(!sel.value){ roles.innerHTML=''; return; }
+    try{
+      const t = await api(`/api/docusign/templates/${encodeURIComponent(sel.value)}/roles`);
+      if(t.emailSubject) drawer.querySelector('#s-subject').value = t.emailSubject;
+      const signers = t.roles.filter(r=>r.type==='signer');
+      if(!signers.length){ roles.innerHTML = '<div class="warnbox">This template has no signer roles.</div>'; return; }
+      roles.innerHTML = signers.map((r,i)=>`<div class="section" style="margin-top:12px;padding-top:12px"><h3>${esc(r.roleName)}${i===0?' (client signer)':''}</h3>
+        <div class="grid2"><div class="field"><label>Name</label><input data-role-name="${esc(r.roleName)}" value="${esc(i===0 ? (c?fullName(c):'') : r.name)}"></div>
+        <div class="field"><label>Email</label><input type="email" data-role-email="${esc(r.roleName)}" value="${esc(i===0 ? (c?c.email:'') : r.email)}"></div></div></div>`).join('');
+      drawer.querySelector('#s-send').disabled = false;
+    }catch(e){ roles.innerHTML = `<div class="warnbox">${esc(e.message)}</div>`; }
+  };
+  drawer.querySelector('#s-send').onclick = async ()=>{
+    const names = [...drawer.querySelectorAll('[data-role-name]')], emails = [...drawer.querySelectorAll('[data-role-email]')];
+    const all = names.map((n,i)=>({ roleName:n.dataset.roleName, name:n.value.trim(), email:emails[i].value.trim() }));
+    if(all.some(r=>!r.name||!r.email)){ toast('Every signer needs a name and email', true); return; }
+    const [first, ...extra] = all;
+    const btn = drawer.querySelector('#s-send'); btn.disabled = true; btn.textContent = 'Sending…';
+    try{
+      await api(`/api/deals/${d.id}/envelopes`,{method:'POST',body:{ templateId:sel.value, templateName: sel.options[sel.selectedIndex].text, roleName:first.roleName, signerName:first.name, signerEmail:first.email, extraRoles:extra, subject:dv('#s-subject') }});
+      await refresh(); openDetail('deal', d.id); toast('Sent for signature');
+    }catch(e){ toast(e.message, true); btn.disabled=false; btn.textContent='Send'; }
+  };
+}
+
+/* ---------- CSV import ---------- */
+function parseCSV(text){
+  const rows=[]; let row=[], field='', inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){ if(ch==='"'){ if(text[i+1]==='"'){ field+='"'; i++; } else inQ=false; } else field+=ch; }
+    else if(ch==='"') inQ=true;
+    else if(ch===','){ row.push(field); field=''; }
+    else if(ch==='\n'||ch==='\r'){ if(ch==='\r'&&text[i+1]==='\n') i++; row.push(field); rows.push(row); row=[]; field=''; }
+    else field+=ch;
+  }
+  if(field!==''||row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.some(x=>x.trim()!==''));
+}
+const IMPORT_FIELDS = {
+  contacts: [['first','First name',/^(first|fname|first ?name|given)/i],['last','Last name',/^(last|lname|last ?name|surname|family)/i],['email','Email',/e-?mail/i],['phone','Phone',/phone|mobile|cell|tel/i],['title','Title',/^(title|job|position|role)/i],['company','Company',/company|organi[sz]ation|account|employer/i],['vertical','Vertical',/vertical|industry|segment/i],['source','Source',/source|lead ?source|channel/i],['value','Deal value',/value|amount|deal|revenue/i],['notes','Notes',/note|comment|description/i]],
+  companies: [['name','Company name',/^(company|name|company ?name|organi[sz]ation|account)/i],['domain','Website / domain',/domain|website|url|web/i],['phone','Phone',/phone|tel/i],['vertical','Vertical',/vertical|industry|segment/i],['size','Size',/size|employees|headcount/i],['city','City',/city|town/i],['state','State',/state|province|region/i],['notes','Notes',/note|comment|description/i]],
+};
+function openImport(kind){
+  const fields = IMPORT_FIELDS[kind];
+  openDrawer(`${dhead(`Import ${kind} from CSV`)}
+    <p class="note">First row must be column headers. ${kind==='contacts'?'Rows with an email already in the CRM are skipped; company names are matched to existing companies or created.':'Existing company names are skipped.'}</p>
+    <div class="field"><input type="file" id="i-file" accept=".csv,text/csv"></div>
+    <div id="i-map"></div>`);
+  drawer.querySelector('#i-file').onchange = e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const r = new FileReader();
+    r.onload = ()=>{
+      const rows = parseCSV(String(r.result).replace(/^﻿/,''));
+      if(rows.length<2){ toast('No data rows found', true); return; }
+      const headers = rows[0].map(h=>h.trim()), data = rows.slice(1);
+      const guess = re => { const i = headers.findIndex(h=>re.test(h)); return i; };
+      const map = drawer.querySelector('#i-map');
+      map.innerHTML = `<p class="note"><b>${data.length}</b> rows, ${headers.length} columns. Map each CRM field to a column:</p>
+        <table class="maptable"><tbody>${fields.map(([k,label,re])=>`<tr><td style="width:40%">${esc(label)}</td><td><select data-map="${k}"><option value="-1">— skip —</option>${headers.map((h,i)=>`<option value="${i}" ${guess(re)===i?'selected':''}>${esc(h)}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table>
+        ${kind==='contacts'?`<div class="field" style="margin-top:12px"><label class="inline"><input type="checkbox" id="i-deals" checked> Create a deal for each imported contact</label></div>
+        <div class="grid2"><div class="field"><label>Deal stage</label><select id="i-stage">${opts(STAGES,'New lead')}</select></div><div class="field"><label>Owner</label><select id="i-owner">${ownerOpts(me.id)}</select></div></div>`:''}
+        <div class="field"><label>Preview (first 3 rows)</label><div class="preview" id="i-preview"></div></div>
+        <div class="row"><button class="btn primary" id="i-go">Import ${data.length} rows</button></div>`;
+      const build = ()=> data.map(row=>{ const o={}; fields.forEach(([k])=>{ const i=Number(drawer.querySelector(`[data-map="${k}"]`).value); o[k]= i>=0 ? (row[i]||'').trim() : ''; }); return o; });
+      const preview = ()=>{ drawer.querySelector('#i-preview').innerHTML = build().slice(0,3).map(o=>esc(Object.entries(o).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join(' | ')||'(empty)')).join('<br>'); };
+      map.querySelectorAll('select[data-map]').forEach(s=>s.onchange=preview); preview();
+      drawer.querySelector('#i-go').onclick = async ()=>{
+        const btn = drawer.querySelector('#i-go'); btn.disabled=true; btn.textContent='Importing…';
+        try{
+          const body = { rows: build() };
+          if(kind==='contacts'){ body.createDeals = drawer.querySelector('#i-deals').checked; body.stage=dv('#i-stage'); body.ownerId=dv('#i-owner'); }
+          const r = await api(`/api/import/${kind}`,{method:'POST',body});
+          await refresh(); closeDrawer();
+          toast(kind==='contacts' ? `Imported ${r.created} contacts (${r.skipped} skipped, ${r.companies} companies created, ${r.deals} deals)` : `Imported ${r.created} companies (${r.skipped} skipped)`);
+        }catch(e){ toast(e.message, true); btn.disabled=false; btn.textContent='Import'; }
+      };
+    };
+    r.readAsText(f);
+  };
 }
 
 renderAuth();
