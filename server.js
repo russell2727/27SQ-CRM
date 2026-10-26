@@ -1082,6 +1082,84 @@ app.put('/api/quotas', requireAdmin, wrap(async (req, res) => {
   res.json({ ok: true, updated: items.length });
 }));
 
+/* ---------- API keys + inbound contacts (Zapier / Seamless / scripts) ---------- */
+const hashKey = k => crypto.createHash('sha256').update(k).digest('hex');
+app.get('/api/keys', requireAdmin, wrap(async (req, res) => {
+  const { rows } = await q('SELECT k.id, k.name, k.prefix, k.last_used_at, k.uses, k.created_at, u.name AS created_by_name FROM api_keys k LEFT JOIN users u ON u.id=k.created_by ORDER BY k.created_at DESC');
+  res.json(rows.map(r => ({ id: r.id, name: r.name, prefix: r.prefix, lastUsedAt: r.last_used_at, uses: r.uses, createdAt: r.created_at, createdBy: r.created_by_name })));
+}));
+app.post('/api/keys', requireAdmin, wrap(async (req, res) => {
+  const name = str(req.body.name) || 'Integration';
+  const key = 'sq27_' + crypto.randomBytes(24).toString('base64url');
+  const { rows } = await q('INSERT INTO api_keys (name, key_hash, prefix, created_by) VALUES ($1,$2,$3,$4) RETURNING id', [name, hashKey(key), key.slice(0, 10), req.session.user.id]);
+  res.json({ id: rows[0].id, name, key }); // shown once
+}));
+app.delete('/api/keys/:id', requireAdmin, wrap(async (req, res) => { await q('DELETE FROM api_keys WHERE id=$1', [req.params.id]); res.json({ ok: true }); }));
+
+const requireApiKey = wrap(async (req, res, next) => {
+  const key = str(req.headers['x-api-key']) || str((req.headers.authorization || '').replace(/^Bearer\s+/i, '')) || str(req.query.key);
+  if (!key) return res.status(401).json({ error: 'API key required (X-API-Key header)' });
+  const { rows } = await q('UPDATE api_keys SET last_used_at=now(), uses=uses+1 WHERE key_hash=$1 RETURNING id, name', [hashKey(key)]);
+  if (!rows[0]) return res.status(401).json({ error: 'Invalid API key' });
+  req.apiKey = rows[0]; next();
+});
+
+// Accepts one contact object or {contacts:[...]}. Field names are forgiving: Seamless, Zapier, HubSpot-style keys all map.
+const pick = (o, keys) => { for (const k of keys) { if (o[k] != null && String(o[k]).trim() !== '') return String(o[k]).trim(); } return ''; };
+function normalizeInbound(o) {
+  const name = pick(o, ['name', 'full_name', 'fullName']);
+  let first = pick(o, ['first', 'first_name', 'firstName', 'firstname', 'given_name']), last = pick(o, ['last', 'last_name', 'lastName', 'lastname', 'surname', 'family_name']);
+  if (!first && !last && name) { const parts = name.split(/\s+/); first = parts.shift() || ''; last = parts.join(' '); }
+  const emails = [pick(o, ['email', 'email_address', 'work_email', 'business_email', 'emailAddress', 'primary_email']), ...(Array.isArray(o.emails) ? o.emails.map(e => typeof e === 'string' ? e : e?.email || e?.address || '') : [])].filter(Boolean);
+  return {
+    first, last, email: (emails[0] || '').toLowerCase(), phone: pick(o, ['phone', 'mobile', 'mobile_phone', 'direct_phone', 'work_phone', 'phone_number', 'cell']),
+    title: pick(o, ['title', 'job_title', 'jobTitle', 'position']), company: pick(o, ['company', 'company_name', 'companyName', 'organization', 'account']),
+    linkedin: pick(o, ['linkedin', 'linkedin_url', 'linkedinUrl', 'linkedin_profile', 'profile_url']), vertical: pick(o, ['vertical', 'industry']),
+    source: pick(o, ['source']), notes: pick(o, ['notes', 'note', 'description']), list: pick(o, ['list', 'list_name', 'listName', 'lists']),
+    city: pick(o, ['city']), state: pick(o, ['state', 'region']), domain: pick(o, ['domain', 'website', 'company_domain', 'company_website']),
+    custom: o.custom && typeof o.custom === 'object' ? o.custom : {},
+  };
+}
+app.post('/api/inbound/contacts', requireApiKey, wrap(async (req, res) => {
+  const body = req.body || {};
+  const list = Array.isArray(body) ? body : Array.isArray(body.contacts) ? body.contacts : [body];
+  if (!list.length) return res.status(400).json({ error: 'No contacts in payload' });
+  const source = str(body.source) || 'Seamless';
+  const ownerId = intOrNull(body.ownerId) || intOrNull(req.query.ownerId) || null;
+  const createDeals = body.createDeal === true || body.createDeals === true || req.query.createDeal === 'true';
+  const pipe = pipelineById(body.pipelineId); const stage = resolveStage(pipe, str(body.stage));
+  const out = { created: 0, updated: 0, skipped: 0, deals: 0, ids: [] };
+  for (const raw of list.slice(0, 500)) {
+    const c = normalizeInbound(raw && typeof raw === 'object' ? raw : {});
+    if (!c.email && !c.first && !c.last) { out.skipped++; continue; }
+    const existing = c.email ? (await q('SELECT * FROM contacts WHERE lower(email)=$1 LIMIT 1', [c.email])).rows[0] : null;
+    let companyId = existing?.company_id || null;
+    if (c.company && !companyId) {
+      const co = (await q('SELECT id FROM companies WHERE lower(name)=$1 LIMIT 1', [c.company.toLowerCase()])).rows[0] || (await q('INSERT INTO companies (name, vertical, domain, city, state) VALUES ($1,$2,$3,$4,$5) RETURNING id', [c.company, c.vertical, c.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, ''), c.city, c.state])).rows[0];
+      companyId = co.id;
+    }
+    const notes = [c.notes, c.list ? `Seamless list: ${c.list}` : ''].filter(Boolean).join('\n');
+    let contact;
+    if (existing) {
+      await q(`UPDATE contacts SET first_name=COALESCE(NULLIF(first_name,''),$2), last_name=COALESCE(NULLIF(last_name,''),$3), phone=COALESCE(NULLIF(phone,''),$4), title=COALESCE(NULLIF(title,''),$5), company_id=COALESCE(company_id,$6), linkedin=COALESCE(NULLIF(linkedin,''),$7), custom=custom || $8, updated_at=now() WHERE id=$1`,
+        [existing.id, c.first, c.last, c.phone, c.title, companyId, cleanLinkedin(c.linkedin), JSON.stringify(cleanCustom('contact', c.custom))]);
+      contact = (await q('SELECT * FROM contacts WHERE id=$1', [existing.id])).rows[0]; out.updated++;
+    } else {
+      const ins = await q(`INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,deal_migrated,linkedin,custom) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12) RETURNING *`,
+        [c.first, c.last, c.title, c.email, c.phone, companyId, c.vertical, c.source || source, notes, ownerId, cleanLinkedin(c.linkedin), JSON.stringify(cleanCustom('contact', c.custom))]);
+      contact = ins.rows[0]; out.created++;
+      await logActivity({ contactId: contact.id, type: 'Note', text: `Added via ${req.apiKey.name}${c.list ? ` (list: ${c.list})` : ''}` });
+      workflows.run('contact_created', { contact }).catch(() => {});
+    }
+    out.ids.push(contact.id);
+    if (createDeals) {
+      const open = (await q('SELECT id FROM deals WHERE contact_id=$1 AND lost=FALSE AND won_at IS NULL LIMIT 1', [contact.id])).rows[0];
+      if (!open) { await createDeal({ name: c.company || `${c.first} ${c.last}`.trim(), contactId: contact.id, companyId, pipelineId: pipe.id, stage, value: 0, vertical: c.vertical, source: c.source || source, ownerId, expectedClose: null, notes: '', custom: {} }, ownerId); out.deals++; }
+    }
+  }
+  res.json(out);
+}));
+
 /* ---------- DocuSign ---------- */
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
   res.json(await docusign.status());

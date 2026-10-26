@@ -386,3 +386,15 @@ CREATE TABLE IF NOT EXISTS quotas (
   UNIQUE (user_id, period)
 );
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS forecast_category TEXT; -- NULL = derived from probability; pipeline | best | commit | omit
+
+-- ===== API keys for inbound integrations (Zapier, Seamless, scripts) =====
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           SERIAL PRIMARY KEY,
+  name         TEXT NOT NULL,
+  key_hash     TEXT UNIQUE NOT NULL,
+  prefix       TEXT NOT NULL,
+  created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  last_used_at TIMESTAMPTZ,
+  uses         INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
