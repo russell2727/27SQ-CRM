@@ -251,7 +251,21 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Something went wrong on the server' }); });
 
 /* ---------- boot ---------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitForDb(maxMs = 5 * 60 * 1000) {
+  const start = Date.now();
+  for (let attempt = 1; ; attempt++) {
+    try { await q('SELECT 1'); return; }
+    catch (e) {
+      if (Date.now() - start > maxMs) throw e;
+      console.log(`Database not ready (${e.code || e.message}); retrying in 5s (attempt ${attempt})`);
+      await sleep(5000);
+    }
+  }
+}
+
 (async () => {
+  await waitForDb();
   await q(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
   app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT}`));
 })().catch(e => { console.error('Boot failed:', e); process.exit(1); });
