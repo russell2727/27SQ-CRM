@@ -358,3 +358,29 @@ CREATE TABLE IF NOT EXISTS meetings (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS meetings_contact_idx ON meetings(contact_id, starts_at DESC);
+
+-- ===== Round 4: dashboards, forecasting =====
+CREATE TABLE IF NOT EXISTS dashboards (
+  id            SERIAL PRIMARY KEY,
+  name          TEXT NOT NULL,
+  widgets       JSONB NOT NULL DEFAULT '[]',   -- [{type, size: 1|2|3, title?, options?}]
+  range         TEXT NOT NULL DEFAULT '30d',
+  email_weekly  BOOLEAN NOT NULL DEFAULT FALSE,
+  email_to      JSONB NOT NULL DEFAULT '[]',   -- user ids
+  sort          INTEGER NOT NULL DEFAULT 0,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO dashboards (name, widgets, range, sort)
+SELECT 'Sales overview', '[{"type":"kpis","size":3},{"type":"forecast_by_month","size":2},{"type":"pipeline_by_stage","size":1},{"type":"deals_over_time","size":2},{"type":"pipeline_by_owner","size":1},{"type":"won_by_owner","size":1},{"type":"source_roi","size":1},{"type":"deals_by_vertical","size":1},{"type":"activity_leaderboard","size":1},{"type":"email_performance","size":1},{"type":"funnel","size":1}]', '30d', 0
+WHERE NOT EXISTS (SELECT 1 FROM dashboards);
+
+CREATE TABLE IF NOT EXISTS quotas (
+  id       SERIAL PRIMARY KEY,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period   TEXT NOT NULL,          -- YYYY-MM
+  amount   NUMERIC(14,2) NOT NULL DEFAULT 0,
+  UNIQUE (user_id, period)
+);
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS forecast_category TEXT; -- NULL = derived from probability; pipeline | best | commit | omit

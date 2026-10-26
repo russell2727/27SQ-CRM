@@ -15,6 +15,7 @@ const catalog = require('./lib/catalog');
 const quotePdf = require('./lib/quote-pdf');
 const workflows = require('./lib/workflows');
 const calendar = require('./lib/calendar');
+const metrics = require('./lib/metrics');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
@@ -86,7 +87,7 @@ const dealOut = r => ({
   vertical: r.vertical, source: r.source, expectedClose: r.expected_close || null, notes: r.notes,
   lost: r.lost, lostAt: r.lost_at, wonAt: r.won_at, stageHistory: r.stage_history || [],
   ownerId: r.owner_id, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at, custom: r.custom || {},
-  pipelineId: r.pipeline_id, valueAuto: r.value_auto, won: isWon(pipelineById(r.pipeline_id), r.stage),
+  pipelineId: r.pipeline_id, valueAuto: r.value_auto, won: isWon(pipelineById(r.pipeline_id), r.stage), forecastCategory: r.forecast_category || null,
   probability: r.lost ? 0 : (stageOf(pipelineById(r.pipeline_id), r.stage)?.probability ?? 0),
 });
 const pipelineOut = r => ({ id: r.id, name: r.name, stages: r.stages || [], isDefault: r.is_default, sort: r.sort });
@@ -96,6 +97,7 @@ const quoteOut = r => ({ id: r.id, dealId: r.deal_id, number: r.number, title: r
 const formOut = r => ({ id: r.id, key: r.key, name: r.name, title: r.title, intro: r.intro, button: r.button, thanks: r.thanks, redirectUrl: r.redirect_url, fields: r.fields || [], createDeal: r.create_deal, pipelineId: r.pipeline_id, stage: r.stage, ownerId: r.owner_id, source: r.source, vertical: r.vertical, notify: r.notify, active: r.active, submissions: r.submissions, createdAt: r.created_at });
 const workflowOut = r => ({ id: r.id, name: r.name, trigger: r.trigger, conditions: r.conditions || {}, actions: r.actions || [], active: r.active, runs: r.runs, lastRunAt: r.last_run_at, createdAt: r.created_at });
 const meetingOut = r => ({ id: r.id, userId: r.user_id, contactId: r.contact_id, dealId: r.deal_id, title: r.title, startsAt: r.starts_at, endsAt: r.ends_at, link: r.link, status: r.status });
+const dashboardOut = r => ({ id: r.id, name: r.name, widgets: r.widgets || [], range: r.range, emailWeekly: r.email_weekly, emailTo: r.email_to || [], sort: r.sort, createdBy: r.created_by });
 const taskOut = r => ({
   id: r.id, title: r.title, dueAt: r.due_at || null, done: r.done, doneAt: r.done_at,
   dealId: r.deal_id, contactId: r.contact_id, assigneeId: r.assignee_id, createdBy: r.created_by, createdAt: r.created_at,
@@ -211,6 +213,8 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     enrollments: enrollments.rows.map(enrollmentOut),
     properties: PROPS.map(propOut),
     mergeTags: engage.MERGE_TAGS,
+    dashboards: (await q('SELECT * FROM dashboards ORDER BY sort, id')).rows.map(dashboardOut),
+    widgetTypes: metrics.WIDGETS,
     forms: forms.rows.map(formOut),
     workflows: wfs.rows.map(workflowOut),
     meetings: meetings.rows.map(meetingOut),
@@ -290,6 +294,7 @@ const dealFields = b => ({
   name: str(b.name), contactId: intOrNull(b.contactId), companyId: intOrNull(b.companyId),
   pipelineId: pipelineById(b.pipelineId).id, stage: resolveStage(pipelineById(b.pipelineId), b.stage), value: num(b.value), vertical: str(b.vertical), source: str(b.source),
   expectedClose: dateOrNull(b.expectedClose), notes: str(b.notes), ownerId: intOrNull(b.ownerId), custom: cleanCustom('deal', b.custom),
+  forecastCategory: ['pipeline', 'best', 'commit', 'omit'].includes(b.forecastCategory) ? b.forecastCategory : null,
 });
 
 async function createDeal(f, actorId) {
@@ -335,9 +340,9 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
   }
   const value = cur.value_auto ? cur.value : f.value; // line items own the value when present
   const { rows } = await q(
-    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,pipeline_id=$15,updated_at=now()
+    `UPDATE deals SET name=$1,contact_id=$2,company_id=$3,stage=$4,value=$5,vertical=$6,source=$7,expected_close=$8,notes=$9,owner_id=$10,stage_history=$11,won_at=$12,custom=$14,pipeline_id=$15,forecast_category=$16,updated_at=now()
      WHERE id=$13 RETURNING *`,
-    [f.name, f.contactId, f.companyId, f.stage, value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom), pipe.id]);
+    [f.name, f.contactId, f.companyId, f.stage, value, f.vertical, f.source, f.expectedClose, f.notes, f.ownerId, JSON.stringify(history), wonAt, req.params.id, JSON.stringify(f.custom), pipe.id, f.forecastCategory]);
   if (cur.stage !== f.stage) { workflows.run('deal_stage', { deal: rows[0], fromStage: cur.stage }).catch(() => {}); if (isWon(pipe, f.stage)) workflows.run('deal_won', { deal: rows[0] }).catch(() => {}); }
   if (f.ownerId && String(f.ownerId) !== String(cur.owner_id)) {
     await notifyUser(f.ownerId, `Deal assigned to you: ${f.name}`, `<p>${esc(me.name)} assigned you the deal <b>${esc(f.name)}</b> (${esc(f.stage)}).</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
@@ -1031,6 +1036,49 @@ app.get('/api/meetings', requireAuth, wrap(async (req, res) => {
 }));
 app.post('/api/meetings/sync', requireAdmin, wrap(async (req, res) => { await calendar.sync(); res.json(calendar.status()); }));
 
+/* ---------- dashboards & forecast ---------- */
+const cleanWidgets = ws => (Array.isArray(ws) ? ws : []).filter(w => metrics.WIDGETS[w.type]).map(w => ({ type: w.type, size: [1, 2, 3].includes(Number(w.size)) ? Number(w.size) : 1, title: str(w.title).slice(0, 80) || undefined, options: w.options && typeof w.options === 'object' ? { pipelineId: intOrNull(w.options.pipelineId), days: intOrNull(w.options.days) } : {} })).slice(0, 24);
+const RANGES = ['7d', '30d', '90d', 'mtd', 'qtd', 'ytd'];
+const cleanRange = r => RANGES.includes(r) || /^custom:\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(r) ? r : '30d';
+app.post('/api/dashboards', requireAuth, wrap(async (req, res) => {
+  const name = str(req.body.name); if (!name) return res.status(400).json({ error: 'Dashboard name is required' });
+  const sort = (await q('SELECT COALESCE(MAX(sort),0)+1 AS s FROM dashboards')).rows[0].s;
+  const { rows } = await q('INSERT INTO dashboards (name, widgets, range, email_weekly, email_to, sort, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+    [name, JSON.stringify(cleanWidgets(req.body.widgets)), cleanRange(req.body.range), !!req.body.emailWeekly, JSON.stringify((Array.isArray(req.body.emailTo) ? req.body.emailTo : []).map(Number).filter(Boolean)), sort, req.session.user.id]);
+  res.json(dashboardOut(rows[0]));
+}));
+app.put('/api/dashboards/:id', requireAuth, wrap(async (req, res) => {
+  const cur = (await q('SELECT * FROM dashboards WHERE id=$1', [req.params.id])).rows[0]; if (!cur) return res.status(404).json({ error: 'Dashboard not found' });
+  const { rows } = await q('UPDATE dashboards SET name=$2, widgets=$3, range=$4, email_weekly=$5, email_to=$6, updated_at=now() WHERE id=$1 RETURNING *',
+    [cur.id, str(req.body.name) || cur.name, JSON.stringify(req.body.widgets != null ? cleanWidgets(req.body.widgets) : cur.widgets), req.body.range != null ? cleanRange(req.body.range) : cur.range,
+      req.body.emailWeekly != null ? !!req.body.emailWeekly : cur.email_weekly, JSON.stringify(req.body.emailTo != null ? (Array.isArray(req.body.emailTo) ? req.body.emailTo : []).map(Number).filter(Boolean) : cur.email_to)]);
+  res.json(dashboardOut(rows[0]));
+}));
+app.delete('/api/dashboards/:id', requireAuth, wrap(async (req, res) => {
+  if ((await q('SELECT COUNT(*)::int AS n FROM dashboards')).rows[0].n < 2) return res.status(400).json({ error: "Can't delete the only dashboard" });
+  await q('DELETE FROM dashboards WHERE id=$1', [req.params.id]); res.json({ ok: true });
+}));
+app.get('/api/dashboards/:id/data', requireAuth, wrap(async (req, res) => {
+  const dash = (await q('SELECT * FROM dashboards WHERE id=$1', [req.params.id])).rows[0]; if (!dash) return res.status(404).json({ error: 'Dashboard not found' });
+  res.json(await metrics.dashboardData(dash, req.query.range ? cleanRange(String(req.query.range)) : null));
+}));
+app.post('/api/dashboards/:id/email', requireAuth, wrap(async (req, res) => {
+  const dash = (await q('SELECT * FROM dashboards WHERE id=$1', [req.params.id])).rows[0]; if (!dash) return res.status(404).json({ error: 'Dashboard not found' });
+  if (!mailer.configured()) return res.status(400).json({ error: 'Email is not configured (Settings)' });
+  const data = await metrics.dashboardData(dash);
+  await mailer.send({ to: req.session.user.email, subject: `${dash.name} — ${data.range.label}`, html: metrics.digestHtml(dash.name, data) });
+  res.json({ ok: true });
+}));
+app.get('/api/forecast', requireAuth, wrap(async (req, res) => { res.json(await metrics.forecast(Number(req.query.months) || 6)); }));
+app.put('/api/quotas', requireAdmin, wrap(async (req, res) => {
+  const items = (Array.isArray(req.body.quotas) ? req.body.quotas : []).filter(x => intOrNull(x.userId) && /^\d{4}-\d{2}$/.test(str(x.period)));
+  for (const x of items) {
+    if (!num(x.amount)) await q('DELETE FROM quotas WHERE user_id=$1 AND period=$2', [x.userId, x.period]);
+    else await q('INSERT INTO quotas (user_id, period, amount) VALUES ($1,$2,$3) ON CONFLICT (user_id, period) DO UPDATE SET amount=EXCLUDED.amount', [x.userId, x.period, num(x.amount)]);
+  }
+  res.json({ ok: true, updated: items.length });
+}));
+
 /* ---------- DocuSign ---------- */
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
   res.json(await docusign.status());
@@ -1139,9 +1187,9 @@ app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- backup ---------- */
 app.get('/api/export', requireAuth, wrap(async (req, res) => {
-  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties, pipelines, products, dealItems, quotes, forms, formSubs, wfs, meetings, visits] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties'), q('SELECT * FROM pipelines'), q('SELECT * FROM products'), q('SELECT * FROM deal_items'), q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at FROM quotes'), q('SELECT * FROM forms'), q('SELECT * FROM form_submissions'), q('SELECT * FROM workflows'), q('SELECT * FROM meetings'), q('SELECT * FROM visits ORDER BY created_at DESC LIMIT 20000')]);
+  const [contacts, companies, deals, activities, tasks, envelopes, emails, sequences, enrollments, properties, pipelines, products, dealItems, quotes, forms, formSubs, wfs, meetings, visits, dashboards, quotas] = await Promise.all([q('SELECT * FROM contacts'), q('SELECT * FROM companies'), q('SELECT * FROM deals'), q('SELECT * FROM activities'), q('SELECT * FROM tasks'), q('SELECT * FROM envelopes'), q('SELECT * FROM emails'), q('SELECT * FROM sequences'), q('SELECT * FROM enrollments'), q('SELECT * FROM properties'), q('SELECT * FROM pipelines'), q('SELECT * FROM products'), q('SELECT * FROM deal_items'), q('SELECT id, deal_id, number, title, intro, terms, items, one_time, monthly, total, valid_until, status, sent_to, sent_at, created_by, created_at FROM quotes'), q('SELECT * FROM forms'), q('SELECT * FROM form_submissions'), q('SELECT * FROM workflows'), q('SELECT * FROM meetings'), q('SELECT * FROM visits ORDER BY created_at DESC LIMIT 20000'), q('SELECT * FROM dashboards'), q('SELECT * FROM quotas')]);
   res.setHeader('Content-Disposition', `attachment; filename="27sq-crm-${new Date().toISOString().slice(0, 10)}.json"`);
-  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows, pipelines: pipelines.rows, products: products.rows, dealItems: dealItems.rows, quotes: quotes.rows, forms: forms.rows, formSubmissions: formSubs.rows, workflows: wfs.rows, meetings: meetings.rows, visits: visits.rows });
+  res.json({ exportedAt: new Date(), contacts: contacts.rows, companies: companies.rows, deals: deals.rows, activities: activities.rows, tasks: tasks.rows, envelopes: envelopes.rows, emails: emails.rows, sequences: sequences.rows, enrollments: enrollments.rows, properties: properties.rows, pipelines: pipelines.rows, products: products.rows, dealItems: dealItems.rows, quotes: quotes.rows, forms: forms.rows, formSubmissions: formSubs.rows, workflows: wfs.rows, meetings: meetings.rows, visits: visits.rows, dashboards: dashboards.rows, quotas: quotas.rows });
 }));
 
 /* ---------- daily task digest (8:00 America/New_York) ---------- */
@@ -1154,6 +1202,20 @@ async function dailyDigestTick() {
   const last = (await q("SELECT value FROM meta WHERE key='digest_sent'")).rows[0]?.value;
   if (last === today) return;
   await q("INSERT INTO meta (key,value) VALUES ('digest_sent',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [today]);
+  // Monday: weekly dashboard digests
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: process.env.DIGEST_TZ || 'America/New_York', weekday: 'short' }).format(now);
+  if (weekday === 'Mon') {
+    const dashes = (await q('SELECT * FROM dashboards WHERE email_weekly')).rows;
+    for (const dash of dashes) {
+      try {
+        const ids = (dash.email_to || []).map(Number); if (!ids.length) continue;
+        const data = await metrics.dashboardData(dash, '7d');
+        const html = metrics.digestHtml(dash.name, data);
+        const recips = (await q('SELECT email FROM users WHERE active AND id = ANY($1)', [ids])).rows;
+        for (const r of recips) mailer.send({ to: r.email, subject: `Weekly: ${dash.name}`, html }).catch(e => console.error('Dashboard digest failed:', e.message));
+      } catch (e) { console.error('Dashboard digest failed:', e.message); }
+    }
+  }
   const users = (await q('SELECT * FROM users WHERE active')).rows;
   for (const u of users) {
     const { rows } = await q(`SELECT t.*, d.name AS deal_name FROM tasks t LEFT JOIN deals d ON d.id=t.deal_id WHERE t.assignee_id=$1 AND t.done=FALSE AND t.due_at IS NOT NULL AND t.due_at <= $2 ORDER BY t.due_at`, [u.id, today]);
@@ -1194,6 +1256,7 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
   engage.init({ query: q, appUrl: APP_URL });
   workflows.init({ query: q, appUrl: APP_URL, notifyUser, logActivity, pipelineById });
   calendar.init({ query: q, logActivity });
+  metrics.init({ query: q, pipelineById });
   app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}, calendar: ${calendar.configured() ? 'on' : 'off'}`));
   setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);
   setInterval(() => engage.runDueEnrollments().catch(e => console.error('Sequence tick failed:', e.message)), 60 * 1000);

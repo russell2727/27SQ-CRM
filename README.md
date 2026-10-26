@@ -19,7 +19,8 @@ Contacts, companies, deals on a 5-stage pipeline, tasks with reminders, analytic
 - **Website tracking** — `<script src=".../track.js" async>` sets a first-party cookie and records page views; once a visitor submits a form (or is identified) their earlier visits attach to the contact and show under "Website activity". Identify webhook `POST /api/public/identify/<siteKey>` for SmartPiXL / One Connect to push identified visitors (email + optional name/company/url).
 - **Workflows** — triggers: deal created, stage changed (with pipeline/stage filters), won, lost, contact created, form submitted (per form), no activity for N days (hourly scan, once per deal per N days). Conditions: vertical, source, owner, min value. Actions: create task, email the owner, email the contact (tracked), enroll in sequence, assign owner, move stage, add note. Run log per workflow.
 - **Meetings** — each user sets a Google Calendar appointment-schedule link in My profile: "Book a meeting" button on contacts and `{{meeting_link}}` merge tag. With Google Calendar sync (service account + domain-wide delegation), meetings whose attendees match a contact are logged automatically (scheduled → held → cancelled) and the next meeting shows on the deal.
-- **Analytics** — new contacts/deals, open pipeline, win rate, average deal, awaiting signature, funnel, breakdowns by stage/vertical/source/owner/company.
+- **Dashboards** — build as many as you want from 18 widgets (key numbers, weighted forecast by close month, pipeline by stage/owner, won by owner, new vs won over time, source performance, deals by vertical, activity leaderboard, email performance, sequence performance, funnel, top companies, quotes, tasks by user, quota attainment, form submissions, stale deals). Sizes 1–3 columns, reorder, date ranges 7d/30d/90d/MTD/QTD/YTD. "Email me this now" and a Monday 8:00 ET weekly digest to chosen recipients.
+- **Forecast** — per rep × month: quota, closed won, commit, best case, pipeline, weighted, forecast (won + commit), best case, gap. Team totals. Categories derive from stage probability (≥75% commit, ≥50% best case) or are set per deal (commit / best / pipeline / omit). Lists open deals with no close date. Admins edit monthly quotas inline.
 - **Team** (admin) — add users, roles, deactivate, reset passwords. **Settings** (admin) — integration status and setup instructions.
 
 ## Deploy on Render (one click)
@@ -109,6 +110,7 @@ lib/catalog.js     rate-card seed + tiered pricing
 lib/quote-pdf.js   branded proposal PDF (pdfkit)
 lib/workflows.js   automation engine
 lib/calendar.js    Google Calendar sync (service account)
+lib/metrics.js     dashboard widgets, forecast, email digest
 schema.sql         tables + idempotent migrations (auto-applied on boot)
 public/index.html  the whole front end
 ```
@@ -144,6 +146,8 @@ GET    /api/contacts/:id/visits
 POST   /api/workflows                   PUT/DELETE /api/workflows/:id    GET /api/workflows/:id/runs   POST /api/workflows/scan (admin)
 GET    /api/meetings?contactId=|dealId= POST /api/meetings/sync (admin)
 PUT    /api/me                          booking link, calendar sync opt-in
+POST   /api/dashboards                  PUT/DELETE /api/dashboards/:id   GET /api/dashboards/:id/data?range=   POST /api/dashboards/:id/email
+GET    /api/forecast?months=            PUT /api/quotas (admin)
 POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export

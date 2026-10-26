@@ -206,6 +206,25 @@ tr.rowlink:hover td{background:var(--panel)}
 .snippet{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all}
 .visit{display:grid;grid-template-columns:1fr auto;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
 .visit .u{color:var(--ink2);font-size:12px;word-break:break-all}
+.dash{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.widget{min-width:0;border-top:2px solid var(--line);padding-top:10px}
+.widget.s2{grid-column:span 2}.widget.s3{grid-column:span 3}
+.widget h3{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:6px}
+.widget h3 .sub{font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink3);font-size:12px}
+.widget .wtools{display:flex;gap:2px}
+.widget .wtools button{all:unset;cursor:pointer;color:var(--ink3);padding:0 4px;font-size:12px}
+.widget .wtools button:hover{color:var(--magenta)}
+.widget table td,.widget table th{padding:5px 8px;font-size:13px}
+.widget .kpis{margin-bottom:0}
+.fc table{font-size:13px}
+.fc td,.fc th{padding:6px 8px;white-space:nowrap}
+.fc td.num,.fc th.num{text-align:right}
+.fc tr.team td{font-weight:600;background:var(--panel)}
+.fc input{width:90px;padding:3px 6px;text-align:right;font-size:13px}
+.fc .gap{color:var(--lost)} .fc .ok{color:var(--won)}
+.fc .mini{font-size:11px;color:var(--ink3)}
+.seg.sm button{padding:4px 9px;font-size:12px}
+@media (max-width:820px){.dash{grid-template-columns:1fr}.widget.s2,.widget.s3{grid-column:span 1}}
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
 .authbox{width:min(400px,100%)}
 .authbox .brand{margin-bottom:28px}
@@ -247,7 +266,8 @@ const ACT_TYPES = ['Note','Call','Email','Meeting','Proposal'];
 
 /* ---------- state ---------- */
 let me = null;
-let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[], pipelines:[], products:[], forms:[], workflows:[], meetings:[] };
+let db = { contacts:[], companies:[], deals:[], tasks:[], envelopes:[], users:[], sequences:[], enrollments:[], properties:[], pipelines:[], products:[], forms:[], workflows:[], meetings:[], dashboards:[] };
+let WIDGET_TYPES={}; let curDash=null, dashRange=null, dashEdit=false; let fcMonths=6;
 let SITE_KEY='';
 let integrations = { docusign:false, email:false, inbound:false, calendar:false };
 let MERGE_TAGS = [];
@@ -318,7 +338,8 @@ async function api(path, opts={}){
 }
 async function refresh(){
   const d = await api('/api/bootstrap');
-  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[], pipelines:d.pipelines||[], products:d.products||[], forms:d.forms||[], workflows:d.workflows||[], meetings:d.meetings||[] }; SITE_KEY=d.siteKey||'';
+  me = d.user; db = { contacts:d.contacts, companies:d.companies, deals:d.deals, tasks:d.tasks, envelopes:d.envelopes, users:d.users, sequences:d.sequences||[], enrollments:d.enrollments||[], properties:d.properties||[], pipelines:d.pipelines||[], products:d.products||[], forms:d.forms||[], workflows:d.workflows||[], meetings:d.meetings||[], dashboards:d.dashboards||[] }; SITE_KEY=d.siteKey||''; WIDGET_TYPES=d.widgetTypes||{};
+  if(!curDash || !byId(db.dashboards,curDash)) curDash = (db.dashboards[0]||{}).id;
   if(!curPipeline || !byId(db.pipelines,curPipeline)) curPipeline = (db.pipelines.find(p=>p.isDefault)||db.pipelines[0]||{}).id;
   STAGES = d.stages; SIGN_STAGES = d.signStages; integrations = d.integrations; MERGE_TAGS = d.mergeTags||[];
   render();
@@ -369,7 +390,7 @@ function routeFromHash(){
   const h = location.hash.replace(/^#/,'');
   if(!h) return;
   const [kind, id] = h.split('/');
-  if(['pipeline','contacts','companies','tasks','sequences','forms','workflows','analytics','team','settings'].includes(kind)){ view=kind; render(); }
+  if(['pipeline','contacts','companies','tasks','sequences','forms','workflows','analytics','forecast','team','settings'].includes(kind)){ view=kind; render(); }
   else if(kind==='deal' && id){ view='pipeline'; render(); openDetail('deal', id); }
   else if(kind==='contact' && id){ view='contacts'; render(); openDetail('contact', id); }
   history.replaceState(null,'',location.pathname);
@@ -389,7 +410,8 @@ function render(){
         <button data-view="sequences">Sequences <span class="n" id="n-seq"></span></button>
         <button data-view="forms">Forms <span class="n" id="n-forms"></span></button>
         <button data-view="workflows">Workflows <span class="n" id="n-wf"></span></button>
-        <button data-view="analytics">Analytics</button>
+        <button data-view="analytics">Dashboards</button>
+        <button data-view="forecast">Forecast</button>
         ${me.role==='admin'?`<button data-view="team">Team <span class="n" id="n-team"></span></button><button data-view="settings">Settings</button>`:''}
       </nav>
       <div class="foot"><span class="who" id="who"></span><button id="profile">My profile</button><button id="pw">Change password</button><button id="export">Export backup (JSON)</button><button id="logout">Sign out</button></div>
@@ -413,7 +435,7 @@ function render(){
   document.getElementById('n-wf').textContent = db.workflows.filter(w=>w.active).length;
 
   const m = document.getElementById('main');
-  m.innerHTML = ({pipeline:renderPipeline, contacts:renderContacts, companies:renderCompanies, tasks:renderTasks, sequences:renderSequences, forms:renderForms, workflows:renderWorkflows, analytics:renderAnalytics, team:renderTeam, settings:renderSettings})[view]();
+  m.innerHTML = ({pipeline:renderPipeline, contacts:renderContacts, companies:renderCompanies, tasks:renderTasks, sequences:renderSequences, forms:renderForms, workflows:renderWorkflows, analytics:renderDashboards, forecast:renderForecast, team:renderTeam, settings:renderSettings})[view]();
   bindMain();
 }
 
@@ -910,65 +932,84 @@ function openPropertyForm(id){
   };
 }
 
-/* ---------- analytics ---------- */
-function renderAnalytics(){
-  const all = db.deals;
-  const d30 = Date.now() - 30*864e5;
-  const newContacts30 = db.contacts.filter(c=>new Date(c.createdAt).getTime()>d30).length;
-  const newDeals30 = all.filter(d=>new Date(d.createdAt).getTime()>d30).length;
-  const won = all.filter(isWon);
-  const won30 = won.filter(d=>new Date(d.wonAt||d.createdAt).getTime()>d30);
-  const lost = all.filter(d=>d.lost);
-  const open = all.filter(dealOpen);
-  const openVal = sum(open), wonVal = sum(won);
-  const closed = won.length + lost.length;
-  const winRate = closed ? Math.round(won.length/closed*100) : 0;
-  const avgDeal = won.length ? wonVal/won.length : 0;
-  const awaiting = db.envelopes.filter(e=>!['completed','declined','voided'].includes(e.status)).length;
-  const wOpen = weighted(open);
-  const fmap = {}; open.forEach(d=>{ const k = d.expectedClose ? new Date(d.expectedClose+'T12:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'}) : 'No close date'; fmap[k]=(fmap[k]||0)+(Number(d.value)||0)*probOf(d)/100; });
-  const forecast = Object.entries(fmap).sort((a,b)=>{ if(a[0]==='No close date') return 1; if(b[0]==='No close date') return -1; return new Date('1 '+a[0])-new Date('1 '+b[0]); }).map(([k,v])=>[k, Math.round(v)]);
+/* ---------- dashboards ---------- */
+const RANGE_LABELS = { '7d':'7 days','30d':'30 days','90d':'90 days','mtd':'MTD','qtd':'QTD','ytd':'YTD' };
+function renderDashboards(){
+  const dash = byId(db.dashboards,curDash) || db.dashboards[0];
+  if(!dash) return `<div class="top"><h1>Dashboards</h1></div><div class="bigempty"><p>No dashboards.</p><button class="btn primary" id="dash-new">New dashboard</button></div>`;
+  const range = dashRange || dash.range;
+  setTimeout(()=>loadDashboard(dash, range), 0);
+  return `<div class="top"><h1>${esc(dash.name)}</h1><div class="actions">
+    ${db.dashboards.length>1?`<select id="dash-sel" style="width:auto">${db.dashboards.map(x=>`<option value="${x.id}" ${x.id===dash.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}
+    <div class="seg sm">${Object.entries(RANGE_LABELS).map(([k,l])=>`<button aria-pressed="${range===k}" data-range="${k}">${l}</button>`).join('')}</div>
+    <button class="btn sm" id="dash-edit">${dashEdit?'Done':'Edit'}</button><button class="btn sm" id="dash-new">New</button>
+  </div></div>
+  ${dashEdit?`<div class="row" style="margin-bottom:14px;gap:10px"><select id="dash-add" style="width:auto"><option value="">Add widget…</option>${Object.entries(WIDGET_TYPES).map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('')}</select><button class="btn sm" id="dash-rename">Rename</button><button class="btn sm" id="dash-mail">Weekly email…</button><button class="btn sm" id="dash-send">Email me this now</button>${db.dashboards.length>1?`<button class="btn sm ghost danger" id="dash-del">Delete dashboard</button>`:''}</div>`:''}
+  <div class="dash" id="dash">${dash.widgets.map(w=>`<div class="widget s${w.size||1}"><h3>${esc(w.title||WIDGET_TYPES[w.type]||w.type)}</h3><div class="empty">Loading…</div></div>`).join('')||'<div class="bigempty" style="grid-column:span 3"><p>Empty dashboard — click Edit, then add widgets.</p></div>'}</div>`;
+}
+async function loadDashboard(dash, range){
+  const el = document.getElementById('dash'); if(!el) return;
+  let data; try{ data = await api(`/api/dashboards/${dash.id}/data?range=${encodeURIComponent(range)}`); }catch(e){ el.innerHTML=`<div class="warnbox" style="grid-column:span 3">${esc(e.message)}</div>`; return; }
+  if(document.getElementById('dash')!==el) return;
+  el.innerHTML = data.widgets.map((w,i)=>`<div class="widget s${w.size||1}" data-wi="${i}"><h3><span>${esc(w.title)}${w.data.subtitle?` <span class="sub">${esc(w.data.subtitle)}</span>`:''}</span>${dashEdit?`<span class="wtools"><button data-wmove="-1" title="Move left">◀</button><button data-wmove="1" title="Move right">▶</button><button data-wsize title="Resize">⤢ ${w.size||1}</button><button data-wdel title="Remove">✕</button></span>`:''}</h3>${renderWidget(w.data)}</div>`).join('') || '<div class="bigempty" style="grid-column:span 3"><p>Empty dashboard — click Edit, then add widgets.</p></div>';
+  const save = async widgets => { await tryApi(()=>api(`/api/dashboards/${dash.id}`,{method:'PUT',body:{widgets}})); await refresh(); };
+  el.querySelectorAll('[data-wdel]').forEach(b=>b.onclick=()=>{ const i=Number(b.closest('[data-wi]').dataset.wi); save(dash.widgets.filter((_,j)=>j!==i)); });
+  el.querySelectorAll('[data-wsize]').forEach(b=>b.onclick=()=>{ const i=Number(b.closest('[data-wi]').dataset.wi); const ws=dash.widgets.map((w,j)=>j===i?{...w,size:((w.size||1)%3)+1}:w); save(ws); });
+  el.querySelectorAll('[data-wmove]').forEach(b=>b.onclick=()=>{ const i=Number(b.closest('[data-wi]').dataset.wi), j=i+Number(b.dataset.wmove); if(j<0||j>=dash.widgets.length) return; const ws=dash.widgets.slice(); [ws[i],ws[j]]=[ws[j],ws[i]]; save(ws); });
+  el.querySelectorAll('[data-open-deal]').forEach(a=>a.onclick=()=>openDetail('deal',a.dataset.openDeal));
+}
+function renderWidget(d){
+  if(d.kpis) return `<div class="kpis">${d.kpis.map(k=>`<div class="kpi ${k.accent?'accent':''}"><div class="v">${k.money?fmtMoney(k.value):esc(k.value)}</div><div class="l">${esc(k.label)}</div></div>`).join('')}</div>`;
+  if(d.bars){ const max=Math.max(1,...d.bars.map(b=>b.value)); return d.bars.length?`<div class="bars">${d.bars.map(b=>`<div class="bar"><span title="${esc(b.label)}">${esc(b.label)}</span><div class="track"><div class="fill ${b.money?'m':''}" style="width:${b.value/max*100}%"></div></div><span class="n">${b.money?fmtMoney(b.value):b.value}</span></div>`).join('')}</div>`:'<div class="empty">No data in range</div>'; }
+  if(d.table) return d.table.rows.length?`<table><thead><tr>${d.table.columns.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${d.table.rows.map(r=>`<tr>${r.map((c,i)=>`<td ${i?'':'style="font-weight:500"'}>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`:'<div class="empty">No data in range</div>';
+  if(d.funnel){ const max=Math.max(1,...d.funnel.map(f=>f.value)); return d.funnel.map(f=>`<div class="fstep"><span>${esc(f.label)}</span><div class="f" style="width:${f.value/max*100}%"></div><span class="pct">${f.value}${f.pct!=null?` · ${f.pct}%`:''}</span></div>`).join(''); }
+  if(d.series){ const W=600,H=170,pad=22,n=d.series.labels.length,max=Math.max(1,...d.series.lines.flatMap(l=>l.values)); const x=i=>pad+i*((W-pad*2)/Math.max(1,n-1)); const y=v=>H-pad-v/max*(H-pad*2);
+    const paths=d.series.lines.map(l=>`<path d="${l.values.map((v,i)=>`${i?'L':'M'}${x(i)},${y(v)}`).join(' ')}" fill="none" stroke="${l.accent?'var(--magenta)':'var(--ink)'}" stroke-width="2"/>`).join('');
+    const ticks=[0,Math.floor(n/2),n-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="${H-4}" font-size="10" fill="var(--ink3)" text-anchor="middle">${esc(d.series.labels[i]||'')}</text>`).join('');
+    return `<div class="chart"><svg viewBox="0 0 ${W} ${H}">${paths}${ticks}<text x="${pad}" y="12" font-size="10" fill="var(--ink3)">max ${max}</text></svg></div><div class="row" style="gap:14px;font-size:12px;color:var(--ink2)">${d.series.lines.map(l=>`<span><span style="display:inline-block;width:10px;height:3px;background:${l.accent?'var(--magenta)':'var(--ink)'};vertical-align:middle;margin-right:4px"></span>${esc(l.name)} (${l.values.reduce((a,b)=>a+b,0)})</span>`).join('')}</div>`; }
+  return '<div class="empty">—</div>';
+}
+function openDashboardMail(dash){
+  openDrawer(`${dhead('Weekly email', esc(dash.name))}
+    <p class="note">Every Monday at 8:00 ET, recipients get this dashboard for the previous 7 days as an email.</p>
+    <div class="field"><label class="inline"><input type="checkbox" id="dm-on" ${dash.emailWeekly?'checked':''}> Send weekly</label></div>
+    <div class="field"><label>Recipients</label>${db.users.filter(u=>u.active).map(u=>`<label class="inline" style="margin-bottom:4px"><input type="checkbox" data-dm-user="${u.id}" ${dash.emailTo.map(String).includes(String(u.id))?'checked':''}> ${esc(u.name)} <span class="muted" style="margin-left:6px">${esc(u.email)}</span></label>`).join('')}</div>
+    <div class="row"><button class="btn primary" id="dm-save">Save</button></div>`);
+  drawer.querySelector('#dm-save').onclick = async ()=>{ await tryApi(()=>api(`/api/dashboards/${dash.id}`,{method:'PUT',body:{emailWeekly:drawer.querySelector('#dm-on').checked, emailTo:[...drawer.querySelectorAll('[data-dm-user]:checked')].map(x=>Number(x.dataset.dmUser))}})); await refresh(); closeDrawer(); toast('Saved'); };
+}
 
-  const fpipe = defaultPipe(); const FST = stageNames(fpipe); const fdeals = all.filter(d=>String(d.pipelineId)===String(fpipe.id));
-  const reached = FST.map(s=> fdeals.filter(d=> (d.stageHistory||[]).some(h=>h.stage===s) || d.stage===s).length);
-  const maxReach = Math.max(1,...reached);
-
-  const days = [...Array(30)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-(29-i)); return d; });
-  const perDay = days.map(d=> all.filter(x=>{ const t=new Date(x.createdAt); return t>=d && t<new Date(d.getTime()+864e5); }).length);
-  const maxDay = Math.max(1,...perDay);
-  const W=600,H=160,pad=18, bw=(W-pad*2)/30;
-  const bars = perDay.map((n,i)=>{ const h=n/maxDay*(H-pad*2); return `<rect x="${pad+i*bw+1}" y="${H-pad-h}" width="${bw-2}" height="${h}" fill="${i===29?'var(--magenta)':'var(--ink)'}" opacity="${n?1:.15}"/>`; }).join('');
-  const labels = [0,10,20,29].map(i=>`<text x="${pad+i*bw+bw/2}" y="${H-3}" font-size="10" fill="var(--ink3)" text-anchor="middle">${days[i].toLocaleDateString('en-US',{month:'short',day:'numeric'})}</text>`).join('');
-
-  const group = key => { const m={}; all.forEach(d=>{ const k=d[key]||'Unassigned'; m[k]=(m[k]||0)+1; }); return Object.entries(m).sort((a,b)=>b[1]-a[1]); };
-  const barList = (entries, accent, money) => entries.length ? entries.map(([k,n])=>`<div class="bar"><span>${esc(k)}</span><div class="track"><div class="fill ${accent?'m':''}" style="width:${n/Math.max(1,entries[0][1])*100}%"></div></div><span class="n">${money?fmtMoney(n):n}</span></div>`).join('') : `<div class="empty">No data yet</div>`;
-  const byOwner = db.users.map(u=>[u.name, sum(won.filter(d=>String(d.ownerId)===String(u.id)))]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]);
-  const byCompany = db.companies.map(co=>[co.name, sum(won.filter(d=>String(d.companyId)===String(co.id)))]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,6);
-
-  return `<div class="top"><h1>Analytics</h1><span class="muted">Last 30 days where noted</span></div>
-  <div class="kpis">
-    <div class="kpi"><div class="v">${newContacts30}</div><div class="l">New contacts, 30 days</div></div>
-    <div class="kpi"><div class="v">${newDeals30}</div><div class="l">New deals, 30 days</div></div>
-    <div class="kpi"><div class="v">${open.length}</div><div class="l">Open deals</div></div>
-    <div class="kpi"><div class="v">${fmtMoney(openVal)}</div><div class="l">Open pipeline value</div></div>
-    <div class="kpi accent"><div class="v">${fmtMoney(wOpen)}</div><div class="l">Weighted forecast</div></div>
-    <div class="kpi accent"><div class="v">${won30.length}</div><div class="l">Deals won, 30 days</div></div>
-    <div class="kpi accent"><div class="v">${fmtMoney(wonVal)}</div><div class="l">Won revenue, all time</div></div>
-    <div class="kpi"><div class="v">${winRate}%</div><div class="l">Win rate (${won.length} won / ${lost.length} lost)</div></div>
-    <div class="kpi"><div class="v">${fmtMoney(avgDeal)}</div><div class="l">Average won deal</div></div>
-    <div class="kpi"><div class="v">${awaiting}</div><div class="l">Awaiting signature</div></div>
-  </div>
-  <div class="panels">
-    <div class="panel chart"><h3>New deals per day</h3><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New deals per day, last 30 days">${bars}${labels}</svg></div>
-    <div class="panel"><h3>Funnel — deals that reached each stage</h3>
-      ${FST.map((s,i)=>`<div class="fstep"><span>${esc(s)}</span><div class="f" style="width:${reached[i]/maxReach*100}%"></div><span class="pct">${reached[i]}${i&&reached[0]?` · ${Math.round(reached[i]/reached[0]*100)}%`:''}</span></div>`).join('')}</div>
-    <div class="panel"><h3>Deals by stage (${esc(fpipe.name||'')})</h3><div class="bars">${barList([...FST.map(s=>[s, fdeals.filter(d=>!d.lost&&d.stage===s).length]), ['Lost',lost.length]])}</div></div>
-    <div class="panel"><h3>Forecast by expected close</h3><div class="bars">${barList(forecast, true, true)}</div></div>
-    <div class="panel"><h3>Deals by vertical</h3><div class="bars">${barList(group('vertical'), true)}</div></div>
-    <div class="panel"><h3>Deals by source</h3><div class="bars">${barList(group('source'))}</div></div>
-    <div class="panel"><h3>Won revenue by owner</h3><div class="bars">${barList(byOwner, true, true)}</div></div>
-    <div class="panel"><h3>Top companies by won revenue</h3><div class="bars">${barList(byCompany, true, true)}</div></div>
+/* ---------- forecast ---------- */
+let fcData=null;
+function renderForecast(){
+  setTimeout(loadForecast, 0);
+  return `<div class="top"><h1>Forecast</h1><div class="actions"><div class="seg sm">${[3,6,12].map(n=>`<button aria-pressed="${fcMonths===n}" data-fcm="${n}">${n} mo</button>`).join('')}</div>${me.role==='admin'?'<button class="btn sm" id="fc-quotas">Edit quotas</button>':''}</div></div><div id="fc" class="muted">Loading…</div>`;
+}
+async function loadForecast(){
+  const el = document.getElementById('fc'); if(!el) return;
+  try{ fcData = await api(`/api/forecast?months=${fcMonths}`); }catch(e){ el.innerHTML=`<div class="warnbox">${esc(e.message)}</div>`; return; }
+  const F = fcData, M = F.months;
+  const cellHtml = c => `<td class="num"><div><b>${fmtMoney(c.forecast)}</b>${c.quota?`<span class="mini"> / ${fmtMoney(c.quota)}</span>`:''}</div><div class="mini">won ${fmtMoney(c.won)} · commit ${fmtMoney(c.commit)}</div><div class="mini">best ${fmtMoney(c.best)} · pipe ${fmtMoney(c.pipeline)} · wtd ${fmtMoney(c.weighted)}</div>${c.quota?`<div class="mini ${c.gap?'gap':'ok'}">${c.gap?`gap ${fmtMoney(c.gap)}`:'quota met'}${c.bestCase>=c.quota&&c.gap?' · reachable best case':''}</div>`:''}</td>`;
+  el.innerHTML = `<p class="note">Forecast = closed won + commit. Deals land in the month of their expected close date; category comes from stage probability (≥75% commit, ≥50% best case) unless set on the deal.</p>
+  <div class="fc" style="overflow:auto"><table><thead><tr><th>Rep</th>${M.map(m=>`<th class="num">${esc(m.label)}</th>`).join('')}</tr></thead><tbody>
+    ${F.reps.map(r=>`<tr><td><b>${esc(r.name)}</b></td>${r.months.map(cellHtml).join('')}</tr>`).join('')}
+    <tr class="team"><td>Team</td>${F.team.months.map(cellHtml).join('')}</tr>
+  </tbody></table></div>
+  <div class="panels" style="margin-top:22px">
+    <div class="panel"><h3>Deals by expected close</h3>${M.map(m=>{ const ds=F.dealsByMonth[m.ym]||[]; if(!ds.length) return ''; return `<h3 style="margin-top:10px;color:var(--ink)">${esc(m.label)} <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(${ds.length} · ${fmtMoney(ds.reduce((a,d)=>a+d.value,0))})</span></h3>${ds.sort((a,b)=>b.value-a.value).map(d=>`<div class="act" style="cursor:pointer" data-open-deal="${d.id}"><span style="flex:1"><b>${esc(d.name)}</b> <span class="muted">${esc(d.stage)} · ${esc(userName(d.ownerId))}</span></span><span class="tag ${d.cat==='commit'?'won':d.cat==='best'?'m':''}">${d.cat}</span><span style="min-width:80px;text-align:right">${fmtMoney(d.value)}</span></div>`).join('')}`; }).join('')||'<div class="empty">No open deals with expected close dates in this window</div>'}</div>
+    <div class="panel"><h3>Open deals with no close date (${F.noClose.length})</h3>${F.noClose.length?F.noClose.sort((a,b)=>b.value-a.value).map(d=>`<div class="act" style="cursor:pointer" data-open-deal="${d.id}"><span style="flex:1"><b>${esc(d.name)}</b> <span class="muted">${esc(d.stage)} · ${esc(userName(d.ownerId))}</span></span><span style="min-width:80px;text-align:right">${fmtMoney(d.value)}</span></div>`).join('')+'<p class="note" style="margin-top:8px">These are excluded from the monthly forecast — set an expected close on each deal.</p>':'<div class="empty">Every open deal has a close date</div>'}</div>
   </div>`;
+  el.querySelectorAll('[data-open-deal]').forEach(a=>a.onclick=()=>openDetail('deal',a.dataset.openDeal));
+}
+function openQuotas(){
+  const F = fcData; if(!F) return;
+  const users = db.users.filter(u=>u.active);
+  openDrawer(`${dhead('Monthly quotas', 'Closed-won revenue target per rep')}
+    <div class="fc" style="overflow:auto"><table><thead><tr><th>Rep</th>${F.months.map(m=>`<th class="num">${esc(m.label)}</th>`).join('')}</tr></thead><tbody>
+    ${users.map(u=>`<tr><td>${esc(u.name)}</td>${F.months.map(m=>{ const qv=(F.quotas.find(x=>x.userId===u.id&&x.period===m.ym)||{}).amount||''; return `<td class="num"><input type="number" min="0" step="1000" data-q-user="${u.id}" data-q-period="${m.ym}" value="${qv}"></td>`; }).join('')}</tr>`).join('')}
+    </tbody></table></div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="q-save">Save quotas</button><button class="btn sm" id="q-fill">Copy first month across</button></div>`);
+  drawer.querySelector('#q-fill').onclick = ()=>{ users.forEach(u=>{ const inputs=[...drawer.querySelectorAll(`[data-q-user="${u.id}"]`)]; const v=inputs[0].value; inputs.forEach(i=>i.value=v); }); };
+  drawer.querySelector('#q-save').onclick = async ()=>{ const quotas=[...drawer.querySelectorAll('[data-q-user]')].map(i=>({userId:Number(i.dataset.qUser),period:i.dataset.qPeriod,amount:i.value||0})); await tryApi(()=>api('/api/quotas',{method:'PUT',body:{quotas}})); closeDrawer(); toast('Quotas saved'); render(); };
 }
 
 /* ---------- main bindings ---------- */
@@ -978,6 +1019,17 @@ function bindMain(){
   m.querySelectorAll('[data-open]').forEach(r=>r.onclick=()=>{ const k=r.dataset.open; if(k==='sequence') openSequenceForm(r.dataset.id); else if(k==='form') openFormEditor(r.dataset.id); else if(k==='workflow') openWorkflowEditor(r.dataset.id); else openDetail(k, r.dataset.id); });
   m.querySelectorAll('[data-mine]').forEach(b=>b.onclick=()=>{ mineOnly=b.dataset.mine==='1'; render(); });
   const ps = m.querySelector('#pipe-sel'); if(ps) ps.onchange = ()=>{ curPipeline = ps.value; render(); };
+  const dsel = m.querySelector('#dash-sel'); if(dsel) dsel.onchange = ()=>{ curDash = Number(dsel.value); dashRange=null; render(); };
+  m.querySelectorAll('[data-range]').forEach(b=>b.onclick=()=>{ dashRange=b.dataset.range; render(); });
+  const de = m.querySelector('#dash-edit'); if(de) de.onclick = ()=>{ dashEdit=!dashEdit; render(); };
+  const dn = m.querySelector('#dash-new'); if(dn) dn.onclick = async ()=>{ const name=prompt('Dashboard name','New dashboard'); if(!name) return; const r=await tryApi(()=>api('/api/dashboards',{method:'POST',body:{name,widgets:[{type:'kpis',size:3}]}})); await refresh(); curDash=r.id; dashEdit=true; render(); };
+  const da = m.querySelector('#dash-add'); if(da) da.onchange = async ()=>{ if(!da.value) return; const dash=byId(db.dashboards,curDash); await tryApi(()=>api(`/api/dashboards/${dash.id}`,{method:'PUT',body:{widgets:[...dash.widgets,{type:da.value,size:da.value==='kpis'?3:1}]}})); await refresh(); };
+  const dr = m.querySelector('#dash-rename'); if(dr) dr.onclick = async ()=>{ const dash=byId(db.dashboards,curDash); const name=prompt('Rename dashboard',dash.name); if(!name) return; await tryApi(()=>api(`/api/dashboards/${dash.id}`,{method:'PUT',body:{name}})); await refresh(); };
+  const dm = m.querySelector('#dash-mail'); if(dm) dm.onclick = ()=>openDashboardMail(byId(db.dashboards,curDash));
+  const dsn = m.querySelector('#dash-send'); if(dsn) dsn.onclick = async ()=>{ await tryApi(()=>api(`/api/dashboards/${curDash}/email`,{method:'POST'})); toast('Sent to your inbox'); };
+  const dd = m.querySelector('#dash-del'); if(dd) dd.onclick = async ()=>{ const dash=byId(db.dashboards,curDash); if(!confirm(`Delete "${dash.name}"?`)) return; await tryApi(()=>api(`/api/dashboards/${dash.id}`,{method:'DELETE'})); curDash=null; dashEdit=false; await refresh(); };
+  m.querySelectorAll('[data-fcm]').forEach(b=>b.onclick=()=>{ fcMonths=Number(b.dataset.fcm); render(); });
+  const fq = m.querySelector('#fc-quotas'); if(fq) fq.onclick = openQuotas;
   m.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{ taskFilter=b.dataset.tf; render(); });
   m.querySelectorAll('[data-import]').forEach(b=>b.onclick=()=>openImport(b.dataset.import));
   bindTaskRows(m);
@@ -1070,6 +1122,7 @@ function openForm(kind, id, preset={}){
       <div class="field"><label>Source</label><select id="d-source"><option value="">—</option>${opts(SOURCES,d.source)}</select></div>
       <div class="field"><label>Owner</label><select id="d-owner">${ownerOpts(d.ownerId)}</select></div>
       <div class="field"><label>Expected close</label><input id="d-close" type="date" value="${esc(d.expectedClose||'')}"></div>
+      <div class="field"><label>Forecast category</label><select id="d-fc"><option value="" ${!d.forecastCategory?'selected':''}>Auto from stage (≥75% commit, ≥50% best case)</option><option value="commit" ${d.forecastCategory==='commit'?'selected':''}>Commit</option><option value="best" ${d.forecastCategory==='best'?'selected':''}>Best case</option><option value="pipeline" ${d.forecastCategory==='pipeline'?'selected':''}>Pipeline</option><option value="omit" ${d.forecastCategory==='omit'?'selected':''}>Omit from forecast</option></select></div>
     </div>
     ${customFieldsHtml('deal', d.custom, 'fd')}
     <div class="field"><label>Notes</label><textarea id="d-notes">${esc(d.notes||'')}</textarea></div>
@@ -1078,7 +1131,7 @@ function openForm(kind, id, preset={}){
     drawer.querySelector('#d-company').onchange = e=>{ const sel=drawer.querySelector('#d-contact'); const cur=sel.value; sel.innerHTML = contactOpts(cur, e.target.value); if(!dv('#d-name') && e.target.value) drawer.querySelector('#d-name').value = companyName(e.target.value); };
     drawer.querySelector('#d-contact').onchange = e=>{ const c=byId(db.contacts,e.target.value); if(c && c.companyId && !dv('#d-company')){ drawer.querySelector('#d-company').value=c.companyId; } if(c && !dv('#d-name')) drawer.querySelector('#d-name').value = companyName(c.companyId)||fullName(c); };
     drawer.querySelector('#d-save').onclick = async ()=>{
-      const body = { name:dv('#d-name'), companyId:dv('#d-company'), contactId:dv('#d-contact'), pipelineId:dv('#d-pipeline'), stage:dv('#d-stage'), value:dv('#d-value'), vertical:dv('#d-vertical'), source:dv('#d-source'), ownerId:dv('#d-owner'), expectedClose:dv('#d-close'), notes:dv('#d-notes'), custom:readCustom() };
+      const body = { name:dv('#d-name'), companyId:dv('#d-company'), contactId:dv('#d-contact'), pipelineId:dv('#d-pipeline'), stage:dv('#d-stage'), value:dv('#d-value'), vertical:dv('#d-vertical'), source:dv('#d-source'), ownerId:dv('#d-owner'), expectedClose:dv('#d-close'), forecastCategory:dv('#d-fc'), notes:dv('#d-notes'), custom:readCustom() };
       if(!body.name){ toast('Deal name is required', true); return; }
       const r = await tryApi(()=>api(id?`/api/deals/${id}`:'/api/deals',{method:id?'PUT':'POST',body}));
       await refresh(); openDetail('deal', id||r.id); toast(id?'Saved':'Deal added');
