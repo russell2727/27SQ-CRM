@@ -19,6 +19,7 @@ Contacts, companies, deals on a 5-stage pipeline, tasks with reminders, analytic
 - **Website tracking** — `<script src=".../track.js" async>` sets a first-party cookie and records page views; once a visitor submits a form (or is identified) their earlier visits attach to the contact and show under "Website activity". Identify webhook `POST /api/public/identify/<siteKey>` for SmartPiXL / One Connect to push identified visitors (email + optional name/company/url).
 - **Workflows** — triggers: deal created, stage changed (with pipeline/stage filters), won, lost, contact created, form submitted (per form), no activity for N days (hourly scan, once per deal per N days). Conditions: vertical, source, owner, min value. Actions: create task, email the owner, email the contact (tracked), enroll in sequence, assign owner, move stage, add note. Run log per workflow.
 - **Meetings** — each user sets a Google Calendar appointment-schedule link in My profile: "Book a meeting" button on contacts and `{{meeting_link}}` merge tag. With Google Calendar sync (service account + domain-wide delegation), meetings whose attendees match a contact are logged automatically (scheduled → held → cancelled) and the next meeting shows on the deal.
+- **Claude connector (MCP)** — the CRM serves a remote MCP endpoint at `/mcp/<api key>` (stateless Streamable HTTP, 19 tools: setup, find/get/add/update contacts, companies, list/get/create/update deals, log activity, tasks, send email, enroll in sequence, pipeline summary, forecast, recent activity). Add it in claude.ai → Settings → Connectors → Add custom connector. Actions are attributed to the key's creator.
 - **Inbound contacts API** — admin creates API keys in Settings; `POST /api/inbound/contacts` with `X-API-Key` accepts one contact or a batch with forgiving field names (Seamless.AI, Zapier, HubSpot-style). Updates by email, creates companies, optional deal. Use with Zapier's Seamless.AI "New Contact" trigger → Webhooks by Zapier.
 - **Dashboards** — build as many as you want from 18 widgets (key numbers, weighted forecast by close month, pipeline by stage/owner, won by owner, new vs won over time, source performance, deals by vertical, activity leaderboard, email performance, sequence performance, funnel, top companies, quotes, tasks by user, quota attainment, form submissions, stale deals). Sizes 1–3 columns, reorder, date ranges 7d/30d/90d/MTD/QTD/YTD. "Email me this now" and a Monday 8:00 ET weekly digest to chosen recipients.
 - **Forecast** — per rep × month: quota, closed won, commit, best case, pipeline, weighted, forecast (won + commit), best case, gap. Team totals. Categories derive from stage probability (≥75% commit, ≥50% best case) or are set per deal (commit / best / pipeline / omit). Lists open deals with no close date. Admins edit monthly quotas inline.
@@ -112,6 +113,7 @@ lib/quote-pdf.js   branded proposal PDF (pdfkit)
 lib/workflows.js   automation engine
 lib/calendar.js    Google Calendar sync (service account)
 lib/metrics.js     dashboard widgets, forecast, email digest
+lib/mcp.js         remote MCP server for Claude
 schema.sql         tables + idempotent migrations (auto-applied on boot)
 public/index.html  the whole front end
 ```
@@ -150,6 +152,7 @@ PUT    /api/me                          booking link, calendar sync opt-in
 POST   /api/dashboards                  PUT/DELETE /api/dashboards/:id   GET /api/dashboards/:id/data?range=   POST /api/dashboards/:id/email
 GET    /api/forecast?months=            PUT /api/quotas (admin)
 GET/POST /api/keys (admin)              DELETE /api/keys/:id             POST /api/inbound/contacts (X-API-Key)
+POST   /mcp/:key                        remote MCP server (claude.ai custom connector)
 POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export

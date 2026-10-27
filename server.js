@@ -16,6 +16,7 @@ const quotePdf = require('./lib/quote-pdf');
 const workflows = require('./lib/workflows');
 const calendar = require('./lib/calendar');
 const metrics = require('./lib/metrics');
+const mcp = require('./lib/mcp');
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT || !!process.env.RENDER;
@@ -351,14 +352,10 @@ app.put('/api/deals/:id', requireAuth, wrap(async (req, res) => {
   res.json(dealOut(rows[0]));
 }));
 
-app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
-  const stage = req.body.stage;
-  const cur = await dealById(req.params.id);
-  if (!cur) return res.status(404).json({ error: 'Deal not found' });
+async function moveStage(cur, stage, me) {
   const pipe = pipelineById(cur.pipeline_id);
-  if (!stageOf(pipe, stage)) return res.status(400).json({ error: 'Unknown stage for this pipeline' });
-  if (cur.stage === stage && !cur.lost) return res.json(dealOut(cur));
-  const me = req.session.user;
+  if (!stageOf(pipe, stage)) return { error: 'Unknown stage for this pipeline' };
+  if (cur.stage === stage && !cur.lost) return { deal: cur };
   const history = [...(cur.stage_history || []), { stage, at: new Date().toISOString(), by: me.id }];
   const wonAt = isWon(pipe, stage) ? new Date() : cur.won_at;
   const { rows } = await q('UPDATE deals SET stage=$1, lost=FALSE, lost_at=NULL, stage_history=$2, won_at=$3, updated_at=now() WHERE id=$4 RETURNING *', [stage, JSON.stringify(history), wonAt, cur.id]);
@@ -367,17 +364,28 @@ app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
   await notifyUser(cur.owner_id, `${cur.name}: moved to ${stage}`, `<p>${esc(me.name)} moved <b>${esc(cur.name)}</b> to <b>${esc(stage)}</b>.</p><p><a href="${dealLink(cur.id)}">Open deal</a></p>`, me.id);
   workflows.run('deal_stage', { deal: rows[0], fromStage: cur.stage }).catch(() => {});
   if (isWon(pipe, stage)) workflows.run('deal_won', { deal: rows[0] }).catch(() => {});
-  res.json(dealOut(rows[0]));
+  return { deal: rows[0] };
+}
+async function setLost(cur, lost, me) {
+  const { rows } = await q('UPDATE deals SET lost=$1, lost_at=$2, updated_at=now() WHERE id=$3 RETURNING *', [lost, lost ? new Date() : null, cur.id]);
+  await logActivity({ dealId: rows[0].id, contactId: rows[0].contact_id, userId: me.id, text: lost ? 'Marked lost' : 'Reopened' });
+  if (lost && rows[0].contact_id) await engage.stopAllForContact(rows[0].contact_id, 'stopped', 'deal marked lost');
+  if (lost) workflows.run('deal_lost', { deal: rows[0] }).catch(() => {});
+  return rows[0];
+}
+
+app.patch('/api/deals/:id/stage', requireAuth, wrap(async (req, res) => {
+  const cur = await dealById(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Deal not found' });
+  const r = await moveStage(cur, req.body.stage, req.session.user);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json(dealOut(r.deal));
 }));
 
 app.patch('/api/deals/:id/lost', requireAuth, wrap(async (req, res) => {
-  const lost = !!req.body.lost;
-  const { rows } = await q('UPDATE deals SET lost=$1, lost_at=$2, updated_at=now() WHERE id=$3 RETURNING *', [lost, lost ? new Date() : null, req.params.id]);
-  if (!rows[0]) return res.status(404).json({ error: 'Deal not found' });
-  await logActivity({ dealId: rows[0].id, contactId: rows[0].contact_id, userId: req.session.user.id, text: lost ? 'Marked lost' : 'Reopened' });
-  if (lost && rows[0].contact_id) await engage.stopAllForContact(rows[0].contact_id, 'stopped', 'deal marked lost');
-  if (lost) workflows.run('deal_lost', { deal: rows[0] }).catch(() => {});
-  res.json(dealOut(rows[0]));
+  const cur = await dealById(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Deal not found' });
+  res.json(dealOut(await setLost(cur, !!req.body.lost, req.session.user)));
 }));
 
 app.delete('/api/deals/:id', requireAuth, wrap(async (req, res) => {
@@ -1096,6 +1104,13 @@ app.post('/api/keys', requireAdmin, wrap(async (req, res) => {
 }));
 app.delete('/api/keys/:id', requireAdmin, wrap(async (req, res) => { await q('DELETE FROM api_keys WHERE id=$1', [req.params.id]); res.json({ ok: true }); }));
 
+async function authKey(key) {
+  if (!key) return null;
+  const { rows } = await q('UPDATE api_keys SET last_used_at=now(), uses=uses+1 WHERE key_hash=$1 RETURNING id, name, created_by', [hashKey(str(key))]);
+  if (!rows[0]) return null;
+  const u = rows[0].created_by ? (await q('SELECT id, name, email FROM users WHERE id=$1 AND active', [rows[0].created_by])).rows[0] : null;
+  return u ? { ...u, keyName: rows[0].name } : { id: null, name: rows[0].name, email: null, keyName: rows[0].name };
+}
 const requireApiKey = wrap(async (req, res, next) => {
   const key = str(req.headers['x-api-key']) || str((req.headers.authorization || '').replace(/^Bearer\s+/i, '')) || str(req.query.key);
   if (!key) return res.status(401).json({ error: 'API key required (X-API-Key header)' });
@@ -1120,14 +1135,8 @@ function normalizeInbound(o) {
     custom: o.custom && typeof o.custom === 'object' ? o.custom : {},
   };
 }
-app.post('/api/inbound/contacts', requireApiKey, wrap(async (req, res) => {
-  const body = req.body || {};
-  const list = Array.isArray(body) ? body : Array.isArray(body.contacts) ? body.contacts : [body];
-  if (!list.length) return res.status(400).json({ error: 'No contacts in payload' });
-  const source = str(body.source) || 'Seamless';
-  const ownerId = intOrNull(body.ownerId) || intOrNull(req.query.ownerId) || null;
-  const createDeals = body.createDeal === true || body.createDeals === true || req.query.createDeal === 'true';
-  const pipe = pipelineById(body.pipelineId); const stage = resolveStage(pipe, str(body.stage));
+async function ingestContacts({ list, source, ownerId, createDeals, pipelineId, stage: stageIn, via }) {
+  const pipe = pipelineById(pipelineId); const stage = resolveStage(pipe, str(stageIn));
   const out = { created: 0, updated: 0, skipped: 0, deals: 0, ids: [] };
   for (const raw of list.slice(0, 500)) {
     const c = normalizeInbound(raw && typeof raw === 'object' ? raw : {});
@@ -1148,7 +1157,7 @@ app.post('/api/inbound/contacts', requireApiKey, wrap(async (req, res) => {
       const ins = await q(`INSERT INTO contacts (first_name,last_name,title,email,phone,company_id,vertical,source,notes,owner_id,deal_migrated,linkedin,custom) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12) RETURNING *`,
         [c.first, c.last, c.title, c.email, c.phone, companyId, c.vertical, c.source || source, notes, ownerId, cleanLinkedin(c.linkedin), JSON.stringify(cleanCustom('contact', c.custom))]);
       contact = ins.rows[0]; out.created++;
-      await logActivity({ contactId: contact.id, type: 'Note', text: `Added via ${req.apiKey.name}${c.list ? ` (list: ${c.list})` : ''}` });
+      await logActivity({ contactId: contact.id, type: 'Note', text: `Added via ${via}${c.list ? ` (list: ${c.list})` : ''}` });
       workflows.run('contact_created', { contact }).catch(() => {});
     }
     out.ids.push(contact.id);
@@ -1157,8 +1166,18 @@ app.post('/api/inbound/contacts', requireApiKey, wrap(async (req, res) => {
       if (!open) { await createDeal({ name: c.company || `${c.first} ${c.last}`.trim(), contactId: contact.id, companyId, pipelineId: pipe.id, stage, value: 0, vertical: c.vertical, source: c.source || source, ownerId, expectedClose: null, notes: '', custom: {} }, ownerId); out.deals++; }
     }
   }
-  res.json(out);
+  return out;
+}
+app.post('/api/inbound/contacts', requireApiKey, wrap(async (req, res) => {
+  const body = req.body || {};
+  const list = Array.isArray(body) ? body : Array.isArray(body.contacts) ? body.contacts : [body];
+  if (!list.length) return res.status(400).json({ error: 'No contacts in payload' });
+  res.json(await ingestContacts({ list, source: str(body.source) || 'Seamless', ownerId: intOrNull(body.ownerId) || intOrNull(req.query.ownerId) || null, createDeals: body.createDeal === true || body.createDeals === true || req.query.createDeal === 'true', pipelineId: body.pipelineId, stage: body.stage, via: req.apiKey.name }));
 }));
+
+/* ---------- MCP (claude.ai custom connector) ---------- */
+app.all('/mcp/:key', (req, res) => mcp.handle(req, res));
+app.get('/.well-known/oauth-authorization-server', (req, res) => res.status(404).end()); // no OAuth: key is in the path
 
 /* ---------- DocuSign ---------- */
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
@@ -1338,6 +1357,7 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
   workflows.init({ query: q, appUrl: APP_URL, notifyUser, logActivity, pipelineById });
   calendar.init({ query: q, logActivity });
   metrics.init({ query: q, pipelineById });
+  mcp.init({ q, authKey, createDeal, moveStage, setLost, logActivity, pipelineById, pipelines: () => PIPES, resolveStage, cleanCustom, cleanLinkedin, ingestContacts, engage, mailer, metrics });
   app.listen(PORT, () => console.log(`27 Squared CRM listening on ${PORT} (${APP_URL}) — email: ${mailer.configured() ? 'on' : 'off'}, inbound: ${engage.imapConfigured() ? 'on' : 'off'}, docusign: ${docusign.configured() ? 'on' : 'off'}, calendar: ${calendar.configured() ? 'on' : 'off'}`));
   setInterval(() => dailyDigestTick().catch(e => console.error('Digest tick failed:', e.message)), 60 * 1000);
   setInterval(() => engage.runDueEnrollments().catch(e => console.error('Sequence tick failed:', e.message)), 60 * 1000);
