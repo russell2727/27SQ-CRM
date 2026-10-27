@@ -157,3 +157,11 @@ POST   /api/users (admin)               PUT /api/users/:id (admin)
 GET    /api/settings (admin)            POST /api/settings/test-email (admin)
 GET    /api/export
 ```
+
+
+## Launchpad handoff (onboarding)
+Closed-won deals can be pushed to 27SQ Launchpad, which creates the client with its onboarding checklist and one launch checklist per channel found in the deal's line items (Hercules ESP → Email, SMS → SMS, Direct Mail → Direct Mail, Paid Social → META + TikTok, CTV → CTV/OTT, append/hygiene → Data Hygiene, creative → Creative). SMS and email default to weekly deployment cycles.
+
+- **Manual:** open a Closed-won deal → **Push to Launchpad** → adjust channels / target launch → push. Re-pushing updates the same client and only adds missing channels. The deal then shows **Open in Launchpad ↗**.
+- **Automatic:** Workflows → New → When *Deal won* → Then *Push to Launchpad*.
+- **Setup:** on the CRM's Render service set `LAUNCHPAD_URL` (Launchpad service URL) and `LAUNCHPAD_SECRET` (Launchpad's `CRM_WEBHOOK_SECRET`). Settings → Launchpad shows connection status.

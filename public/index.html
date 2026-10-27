@@ -652,7 +652,7 @@ function bindEnrollStops(scope, after){
 
 /* ---------- forms ---------- */
 const TRIG_LABEL = { deal_created:'Deal created', deal_stage:'Deal stage changed', deal_won:'Deal won', deal_lost:'Deal lost', contact_created:'Contact created', form_submitted:'Form submitted', no_activity:'No activity on a deal for N days' };
-const ACT_LABEL = { create_task:'Create a task', notify_owner:'Email the owner', email_contact:'Email the contact', enroll_sequence:'Enroll in a sequence', set_owner:'Assign owner', set_stage:'Move deal to stage', add_note:'Add a note' };
+const ACT_LABEL = { create_task:'Create a task', notify_owner:'Email the owner', email_contact:'Email the contact', enroll_sequence:'Enroll in a sequence', set_owner:'Assign owner', set_stage:'Move deal to stage', add_note:'Add a note', push_to_launchpad:'Push to Launchpad (onboarding)' };
 function renderForms(){
   return `<div class="top"><h1>Forms</h1><div class="actions"><button class="btn primary" data-new="form">New form</button></div></div>
   ${db.forms.length ? `<table><thead><tr><th>Form</th><th>Fields</th><th>Creates</th><th>Owner</th><th>Submissions</th><th>Status</th></tr></thead><tbody>
@@ -725,6 +725,7 @@ function openWorkflowEditor(id){
       case 'set_owner': return `<div class="field"><label>New owner</label><select class="wa-user">${ownerOpts(a.userId||me.id)}</select></div>`;
       case 'set_stage': return `<div class="field"><label>Move deal to</label><select class="wa-stage">${[...new Set(db.pipelines.flatMap(stageNames))].map(st=>`<option ${a.stage===st?'selected':''}>${esc(st)}</option>`).join('')}</select></div>`;
       case 'add_note': return `<div class="field"><label>Note</label><input class="wa-text" value="${esc(a.text||'')}"></div>`;
+      case 'push_to_launchpad': return `<div class="field"><label>Weekly cycles for SMS / email</label><select class="wa-recurring"><option value="yes" ${a.recurring!=='no'?'selected':''}>Yes — set SMS & email campaigns to repeat every 7 days</option><option value="no" ${a.recurring==='no'?'selected':''}>No — one-time launches</option></select></div><p class="note">Creates the client in Launchpad with its onboarding checklist and one campaign per channel found in the deal's line items. Re-running updates the same client.${integrations.launchpad?'':' <b>Launchpad isn\'t connected</b> — an admin sets LAUNCHPAD_URL / LAUNCHPAD_SECRET.'}</p>`;
     }
     return '';
   }
@@ -755,7 +756,7 @@ function openWorkflowEditor(id){
   drawer.querySelector('#wf-save').onclick = async ()=>{
     const g = sel=>{ const el=drawer.querySelector(sel); return el?el.value.trim():''; };
     const conditions = { pipelineId:g('#wc-pipeline'), stage:g('#wc-stage'), vertical:g('#wc-vertical'), source:g('#wc-source'), ownerId:g('#wc-owner'), formId:g('#wc-form'), days:g('#wc-days'), minValue:g('#wc-min') };
-    const actions = [...acts.querySelectorAll('[data-act]')].map(el=>{ const v=cls=>{ const x=el.querySelector(cls); return x?x.value.trim():''; }; return { type:el.querySelector('.wa-type').value, title:v('.wa-title'), dueDays:v('.wa-due'), assignee:v('.wa-assignee'), subject:v('.wa-subject'), message:v('.wa-message'), body:v('.wa-ebody'), sequenceId:v('.wa-seq'), userId:v('.wa-user'), stage:v('.wa-stage'), text:v('.wa-text') }; });
+    const actions = [...acts.querySelectorAll('[data-act]')].map(el=>{ const v=cls=>{ const x=el.querySelector(cls); return x?x.value.trim():''; }; return { type:el.querySelector('.wa-type').value, title:v('.wa-title'), dueDays:v('.wa-due'), assignee:v('.wa-assignee'), subject:v('.wa-subject'), message:v('.wa-message'), body:v('.wa-ebody'), sequenceId:v('.wa-seq'), userId:v('.wa-user'), stage:v('.wa-stage'), text:v('.wa-text'), recurring:v('.wa-recurring') }; });
     if(!dv('#wf-name')||!actions.length){ toast('Name and at least one action', true); return; }
     await tryApi(()=>api(id?`/api/workflows/${id}`:'/api/workflows',{method:id?'PUT':'POST',body:{name:dv('#wf-name'),active:dv('#wf-active')==='1',trigger:dv('#wf-trigger'),conditions,actions}}));
     await refresh(); closeDrawer(); toast(id?'Workflow saved':'Workflow created');
@@ -832,6 +833,11 @@ async function loadSettings(){
            <p class="note">In DocuSign → Settings → Apps and Keys: create an app, add an RSA keypair, note the Integration Key, your User ID and API Account ID. Then set:</p>
            <p class="note"><code>DS_INTEGRATION_KEY</code> <code>DS_USER_ID</code> <code>DS_ACCOUNT_ID</code> <code>DS_PRIVATE_KEY_B64</code> (base64 of the private key file) and <code>DS_ENV</code> = production (or demo for a sandbox).</p>`}
         <p class="note" style="margin-top:14px"><b>Status updates:</b> in DocuSign → Settings → Connect, add a configuration pointing at <code>${esc(s.webhookUrl)}</code>, format JSON, events: envelope sent/delivered/completed/declined/voided. Set an HMAC key there and put the same value in <code>DS_WEBHOOK_SECRET</code>${ds.webhookSecretSet?' (set)':' (not set)'}. Without Connect, use the Refresh button on each envelope.</p>
+      </div>
+      <div class="panel"><h3>Launchpad (onboarding handoff)</h3>
+        ${(s.launchpad||{}).configured ? ((s.launchpad||{}).reachable ? `<div class="okbox">Connected to <a href="${esc(s.launchpad.url)}" target="_blank" rel="noopener">${esc(s.launchpad.url)}</a>. "Push to Launchpad" appears on Closed-won deals, and a workflow action can do it automatically.</div>` : `<div class="warnbox">Configured but Launchpad isn't reachable at ${esc(s.launchpad.url)}: ${esc(s.launchpad.error||'')}</div>`)
+        : `<div class="warnbox">Not configured.</div><p class="note">Set <code>LAUNCHPAD_URL</code> (the Launchpad service URL) and <code>LAUNCHPAD_SECRET</code> (copy Launchpad's <code>CRM_WEBHOOK_SECRET</code> from its Render Environment tab) on this service.</p>`}
+        <p class="note" style="margin-top:14px">Tip: Workflows → New → When <b>Deal won</b> → Then <b>Push to Launchpad</b> makes the handoff automatic on every closed-won deal.</p>
       </div>
     </div>
     <div class="section"><h3>Connect Claude</h3>
@@ -1262,7 +1268,7 @@ async function openDetail(kind, id){
     const reopen = ()=>openDetail('deal',id);
     openDrawer(`${dhead(esc(d.name), [co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:'', c?`<a data-open-contact="${c.id}">${esc(fullName(c))}</a>`:''].filter(Boolean).join(' · '))}
     <div class="row"><button class="btn sm" id="d-edit">Edit</button>${c&&c.email?`<button class="btn sm" id="d-email">Email</button>`:''}${d.lost?`<button class="btn sm" id="d-reopen">Reopen deal</button>`:`<button class="btn sm danger" id="d-lost">Mark lost</button>`}
-      ${canSign?`<button class="btn sm primary" id="d-sign">Send for signature</button>`:''}<span style="margin-left:auto">${stageTag(d)}</span></div>
+      ${canSign?`<button class="btn sm primary" id="d-sign">Send for signature</button>`:''}${isWon(d)?`<button class="btn sm" id="d-launchpad">${d.custom&&d.custom.launchpad_client_id?'Update in Launchpad':'Push to Launchpad'}</button>`:''}${d.custom&&d.custom.launchpad_url?`<a class="btn sm ghost" href="${esc(d.custom.launchpad_url)}" target="_blank">Open in Launchpad ↗</a>`:''}<span style="margin-left:auto">${stageTag(d)}</span></div>
     ${!d.lost?`<div class="stages">${stageNames(dpipe).map(s=>`<button data-stage="${esc(s)}" ${d.stage===s?'aria-current="step"':''}>${esc(s)}</button>`).join('')}</div>`:''}
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Deal value</span><span>${d.value?fmtMoney(d.value):'—'}${d.valueAuto?' <span class="muted" style="font-size:12px">from line items</span>':''}${!d.lost&&!isWon(d)?` · <span class="muted" style="font-size:12px">${probOf(d)}% → ${fmtMoney((Number(d.value)||0)*probOf(d)/100)} weighted</span>`:''}</span>
@@ -1297,6 +1303,7 @@ async function openDetail(kind, id){
     const lostBtn = drawer.querySelector('#d-lost'); if(lostBtn) lostBtn.onclick=async ()=>{ await tryApi(()=>api(`/api/deals/${id}/lost`,{method:'PATCH',body:{lost:true}})); await refresh(); reopen(); toast('Marked lost'); };
     const rb = drawer.querySelector('#d-reopen'); if(rb) rb.onclick=async ()=>{ await tryApi(()=>api(`/api/deals/${id}/lost`,{method:'PATCH',body:{lost:false}})); await refresh(); reopen(); toast('Reopened'); };
     const sign = drawer.querySelector('#d-sign'); if(sign) sign.onclick=()=>openSign(d);
+    const lp = drawer.querySelector('#d-launchpad'); if(lp) lp.onclick=()=>openLaunchpad(d);
     drawer.querySelectorAll('[data-env-refresh]').forEach(b=>b.onclick=async ()=>{ b.disabled=true; const e=await tryApi(()=>api(`/api/envelopes/${b.dataset.envRefresh}/refresh`,{method:'POST'})); await refresh(); reopen(); toast(envStatusLabel(e.status)); });
     drawer.querySelectorAll('[data-env-void]').forEach(b=>b.onclick=async ()=>{ const reason=prompt('Reason for voiding (sent to the signer):','Superseded'); if(reason==null) return; await tryApi(()=>api(`/api/envelopes/${b.dataset.envVoid}/void`,{method:'POST',body:{reason}})); await refresh(); reopen(); toast('Envelope voided'); });
     bindTasksSection(reopen, {dealId:d.id});
@@ -1450,6 +1457,35 @@ Happy to walk through it whenever suits you.</textarea></div>
 }
 
 /* ---------- DocuSign send ---------- */
+const LP_CHANNELS = { meta:'META (Facebook / Instagram)', direct_mail:'Direct Mail', email:'Email (Hercules ESP)', sms:'SMS', hygiene:'Data Hygiene & Append', tiktok:'TikTok', ctv:'CTV / OTT', creative:'Creative Design' };
+async function openLaunchpad(d){
+  openDrawer(`${dhead('Push to Launchpad', esc(d.name))}
+    ${integrations.launchpad ? '' : `<div class="warnbox">Launchpad isn't connected. An admin sets LAUNCHPAD_URL and LAUNCHPAD_SECRET on the CRM service.</div>`}
+    <p class="note">Creates <b>${esc(d.name)}</b> in Launchpad with the 20-step onboarding checklist and one launch checklist per channel. Channels are pre-selected from the deal's line items. Re-pushing updates the same client and only adds missing channels.</p>
+    <div id="lp-body"><div class="empty">Loading…</div></div>`);
+  let pv; try { pv = await api(`/api/deals/${d.id}/launchpad/preview`); } catch(e){ drawer.querySelector('#lp-body').innerHTML = `<div class="warnbox">${esc(e.message)}</div>`; return; }
+  const body = drawer.querySelector('#lp-body');
+  body.innerHTML = `
+    <div class="grid2">
+      <div class="field"><label>Company</label><input value="${esc(pv.company)}" disabled></div>
+      <div class="field"><label>Vertical</label><input value="${esc(pv.vertical||'—')}" disabled></div>
+      <div class="field"><label>Account lead</label><input value="${esc(pv.account_lead_email||'— (no owner)')}" disabled></div>
+      <div class="field"><label>Target launch</label><input id="lp-launch" type="date" value="${esc(pv.target_launch)}"></div>
+    </div>
+    <div class="field"><label>Channels to create</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${Object.entries(LP_CHANNELS).map(([k,l])=>`<label style="display:flex;gap:8px;align-items:center;font-weight:500;text-transform:none;letter-spacing:0;font-size:14px"><input type="checkbox" class="lp-ch" value="${k}" ${pv.channels.includes(k)?'checked':''}> ${esc(l)}</label>`).join('')}</div></div>
+    <div class="field"><label style="display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;font-size:14px;font-weight:500"><input type="checkbox" id="lp-rec" checked> Set SMS &amp; email campaigns to repeat weekly (deployment cycles)</label></div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="lp-go" ${integrations.launchpad?'':'disabled'}>${d.custom&&d.custom.launchpad_client_id?'Update in Launchpad':'Create in Launchpad'}</button></div>`;
+  body.querySelector('#lp-go').onclick = async ()=>{
+    const btn = body.querySelector('#lp-go'); btn.disabled = true; btn.textContent = 'Pushing…';
+    const channels = [...body.querySelectorAll('.lp-ch:checked')].map(x=>x.value);
+    try {
+      const r = await api(`/api/deals/${d.id}/launchpad`,{method:'POST',body:{channels, targetLaunch: body.querySelector('#lp-launch').value, recurring: body.querySelector('#lp-rec').checked}});
+      await refresh(); toast(r.created ? 'Client created in Launchpad' : 'Launchpad client updated');
+      body.innerHTML = `<div class="section"><p>${r.created?'Created':'Updated'} <b>${esc(pv.company)}</b>${r.campaigns_created.length?` with ${r.campaigns_created.length} campaign(s): ${esc(r.campaigns_created.join(', '))}`:' — no new campaigns (already exist)'}.</p><a class="btn primary" href="${esc(r.url)}" target="_blank">Open in Launchpad ↗</a></div>`;
+    } catch(e){ toast(e.message, true); btn.disabled = false; btn.textContent = 'Retry'; }
+  };
+}
 async function openSign(d){
   const c = byId(db.contacts,d.contactId);
   openDrawer(`${dhead('Send for signature', esc(d.name))}

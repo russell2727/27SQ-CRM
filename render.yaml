@@ -19,3 +19,6 @@ services:
 databases:
   - name: 27sq-crm-db
     plan: basic-256mb
+# Launchpad handoff — set in the Render dashboard (Environment tab):
+#   LAUNCHPAD_URL    = https://<launchpad-service>.onrender.com
+#   LAUNCHPAD_SECRET = Launchpad's CRM_WEBHOOK_SECRET

@@ -14,6 +14,7 @@ const engage = require('./lib/engage');
 const catalog = require('./lib/catalog');
 const quotePdf = require('./lib/quote-pdf');
 const workflows = require('./lib/workflows');
+const launchpad = require('./lib/launchpad');
 const calendar = require('./lib/calendar');
 const metrics = require('./lib/metrics');
 const mcp = require('./lib/mcp');
@@ -224,7 +225,8 @@ app.get('/api/bootstrap', requireAuth, wrap(async (req, res) => {
     products: (await q('SELECT * FROM products ORDER BY sort, id')).rows.map(productOut),
     stages: STAGE_NAMES(defaultPipeline()),
     signStages: (defaultPipeline()?.stages || []).filter(st => st.sign).map(st => st.name),
-    integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured(), calendar: calendar.configured() },
+    integrations: { docusign: docusign.configured(), email: mailer.configured(), inbound: engage.imapConfigured(), calendar: calendar.configured(), launchpad: launchpad.configured() },
+    launchpadUrl: (process.env.LAUNCHPAD_URL || '').replace(/\/$/, ''),
   });
 }));
 
@@ -1180,6 +1182,20 @@ app.all('/mcp/:key', (req, res) => mcp.handle(req, res));
 app.get('/.well-known/oauth-authorization-server', (req, res) => res.status(404).end()); // no OAuth: key is in the path
 
 /* ---------- DocuSign ---------- */
+/* ---------- Launchpad (onboarding handoff) ---------- */
+app.get('/api/launchpad/status', requireAuth, wrap(async (req, res) => { res.json(await launchpad.status()); }));
+app.get('/api/deals/:id/launchpad/preview', requireAuth, wrap(async (req, res) => {
+  const d = await dealById(req.params.id); if (!d) return res.status(404).json({ error: 'Deal not found' });
+  res.json(await launchpad.buildPayload(d.id));
+}));
+app.post('/api/deals/:id/launchpad', requireAuth, wrap(async (req, res) => {
+  const d = await dealById(req.params.id); if (!d) return res.status(404).json({ error: 'Deal not found' });
+  const channels = Array.isArray(req.body.channels) ? req.body.channels.filter(k => launchpad.CHANNELS.includes(k)) : undefined;
+  const r = await launchpad.push(d.id, { channels, target_launch: str(req.body.targetLaunch) || undefined, recurring: req.body.recurring !== false });
+  await logActivity({ dealId: d.id, contactId: d.contact_id, userId: req.session.user.id, type: 'Note', text: `${r.created ? 'Pushed to' : 'Updated in'} Launchpad${r.campaigns_created?.length ? ` — campaigns: ${r.campaigns_created.join(', ')}` : ''}` });
+  res.json(r);
+}));
+
 app.get('/api/docusign/status', requireAuth, wrap(async (req, res) => {
   res.json(await docusign.status());
 }));
@@ -1278,7 +1294,7 @@ app.put('/api/users/:id', requireAdmin, wrap(async (req, res) => {
 
 /* ---------- settings (admin) ---------- */
 app.get('/api/settings', requireAdmin, wrap(async (req, res) => {
-  res.json({ appUrl: APP_URL, email: mailer.describe(), inbound: { configured: engage.imapConfigured(), host: process.env.IMAP_HOST || 'imap.gmail.com', mailbox: process.env.IMAP_USER || process.env.SMTP_USER || null, lastUid: (await q("SELECT value FROM meta WHERE key='imap_last_uid'")).rows[0]?.value || null }, docusign: await docusign.status(), webhookUrl: `${APP_URL}/api/docusign/webhook`, calendar: calendar.status(), siteKey: SITE_KEY, trackSnippet: `<script src="${APP_URL}/track.js" async></script>`, identifyUrl: `${APP_URL}/api/public/identify/${SITE_KEY}` });
+  res.json({ appUrl: APP_URL, email: mailer.describe(), inbound: { configured: engage.imapConfigured(), host: process.env.IMAP_HOST || 'imap.gmail.com', mailbox: process.env.IMAP_USER || process.env.SMTP_USER || null, lastUid: (await q("SELECT value FROM meta WHERE key='imap_last_uid'")).rows[0]?.value || null }, docusign: await docusign.status(), launchpad: await launchpad.status(), webhookUrl: `${APP_URL}/api/docusign/webhook`, calendar: calendar.status(), siteKey: SITE_KEY, trackSnippet: `<script src="${APP_URL}/track.js" async></script>`, identifyUrl: `${APP_URL}/api/public/identify/${SITE_KEY}` });
 }));
 app.post('/api/settings/test-email', requireAdmin, wrap(async (req, res) => {
   await mailer.send({ to: req.session.user.email, subject: '27 Squared CRM — test email', html: '<p>Email notifications are working.</p>' });
@@ -1355,6 +1371,7 @@ async function waitForDb(maxMs = 5 * 60 * 1000) {
   await ensureSiteKey();
   engage.init({ query: q, appUrl: APP_URL });
   workflows.init({ query: q, appUrl: APP_URL, notifyUser, logActivity, pipelineById });
+  launchpad.init({ query: q });
   calendar.init({ query: q, logActivity });
   metrics.init({ query: q, pipelineById });
   mcp.init({ q, authKey, createDeal, moveStage, setLost, logActivity, pipelineById, pipelines: () => PIPES, resolveStage, cleanCustom, cleanLinkedin, ingestContacts, engage, mailer, metrics });
