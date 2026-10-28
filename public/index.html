@@ -1360,7 +1360,7 @@ async function openDetail(kind, id){
     const co = byId(db.companies,c.companyId), ds = dealsOf.contact(c.id);
     const reopen = ()=>openDetail('contact',id);
     openDrawer(`${dhead(esc(fullName(c)), `${esc(c.title||'')}${c.title&&co?' at ':''}${co?`<a data-open-company="${co.id}">${esc(co.name)}</a>`:''}`)}
-    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}${(byId(db.users,me.id)||{}).bookingUrl?`<a class="btn sm" href="${esc((byId(db.users,me.id)||{}).bookingUrl)}" target="_blank" rel="noopener">Book a meeting</a>`:''}${c.linkedin?`<a class="btn sm" href="${esc(c.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
+    <div class="row"><button class="btn sm" id="c-edit">Edit</button>${c.phone?`<a class="btn sm" href="tel:${esc(c.phone)}" data-log-call="${c.id}">Call</a><a class="btn sm" href="sms:${esc(c.phone)}">Text</a>`:''}${c.email?`<button class="btn sm" id="c-email">Email</button><button class="btn sm" id="c-enroll">Enroll in sequence</button>`:''}${(byId(db.users,me.id)||{}).bookingUrl?`<a class="btn sm" href="${esc((byId(db.users,me.id)||{}).bookingUrl)}" target="_blank" rel="noopener">Book a meeting</a>`:''}${c.linkedin?`<a class="btn sm" href="${esc(c.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>`:''}<button class="btn sm" id="c-newdeal">New deal</button></div>
     <div class="section"><h3>Details</h3><div class="kv">
       <span class="k">Email</span><span>${c.email?`<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>`:'—'}</span>
       <span class="k">Phone</span><span>${c.phone?`<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>`:'—'}</span>
@@ -1383,6 +1383,7 @@ async function openDetail(kind, id){
     ${visitsSection()}
     ${activitySection()}`);
     drawer.querySelector('#c-edit').onclick = ()=>openForm('contact',id);
+    const lc = drawer.querySelector('[data-log-call]'); if(lc) lc.addEventListener('click', ()=>{ setTimeout(()=>{ if(confirm('Log this call on the contact?')){ const note=prompt('Call notes (optional)','')??''; api('/api/activities',{method:'POST',body:{contactId:c.id,type:'Call',text:'Called '+(c.phone||'')+(note?' — '+note:'')}}).then(()=>{ toast('Call logged'); loadActivities({contactId:c.id}); }).catch(()=>{}); } }, 1500); });
     loadMeetings({contactId:c.id}); loadVisits(c.id);
     const ce = drawer.querySelector('#c-email'); if(ce) ce.onclick = ()=>openCompose({contact:c, deal: ds.find(dealOpen)||null});
     const cen = drawer.querySelector('#c-enroll'); if(cen) cen.onclick = ()=>openEnroll(c, (ds.find(dealOpen)||{}).id);
