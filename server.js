@@ -1344,6 +1344,8 @@ async function dailyDigestTick() {
 }
 
 /* ---------- static + errors ---------- */
+app.get('/manifest.webmanifest', (req, res) => { res.type('application/manifest+json'); res.sendFile(path.join(__dirname, 'public', 'manifest.webmanifest')); });
+app.get('/sw.js', (req, res) => { res.set('Cache-Control', 'no-cache'); res.type('application/javascript'); res.sendFile(path.join(__dirname, 'public', 'sw.js')); });
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((err, req, res, next) => { if (!err.expose) console.error(err); res.status(err.status || 500).json({ error: err.expose ? err.message : (err.publicMessage || 'Something went wrong on the server') }); });
